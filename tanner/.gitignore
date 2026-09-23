@@ -1,1 +1,3 @@
+# python dependencies cause it sucks
 .venv
+__pycache__
