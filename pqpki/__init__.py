@@ -50,6 +50,8 @@ from .algorithms import (
     get_algorithm,
     list_algorithms,
 )
+from .ca import CertificateAuthority
+from .csr import generate_csr, verify_csr_signature
 from .errors import (
     AlgorithmError,
     CAError,
@@ -73,6 +75,11 @@ __all__ = [
     "MetricEvent",
     "get_algorithm",
     "list_algorithms",
+    # certificate authority
+    "CertificateAuthority",
+    # certificate signing requests
+    "generate_csr",
+    "verify_csr_signature",
     # errors
     "PQPKIError",
     "AlgorithmError",
