@@ -360,7 +360,7 @@ def Compress(x: int, d: int) -> int:
     x : int in [0, q-1].
     d : int, 1 ≤ d < 12.
     """
-    assert 0 <= d < 12, "d must satisfy 0 ≤ d < 12"
+    assert 1 <= d < 12, "d must satisfy 1 ≤ d < 12"
     # ⌈(2^d / q) · x⌋ = ⌊(2^d * x + q/2) / q⌋  (integer arithmetic)
     # Use the formula:  round(2^d * x / q) = (2^d * x + q//2) // q
     two_d = 1 << d
@@ -384,7 +384,7 @@ def Decompress(y: int, d: int) -> int:
     y : int in [0, 2^d - 1].
     d : int, 1 ≤ d < 12.
     """
-    assert 0 <= d < 12, "d must satisfy 0 ≤ d < 12"
+    assert 1 <= d < 12, "d must satisfy 1 ≤ d < 12"
     # ⌈(q / 2^d) · y⌋ = ⌊(q * y + 2^{d-1}) / 2^d⌋  (integer arithmetic)
     two_d = 1 << d
     return (q * y + two_d // 2) // two_d
@@ -615,11 +615,15 @@ def MultiplyNTTs(f_hat: List[int], g_hat: List[int]) -> List[int]:
             )
         return ĥ
 
-    The values ζ^{2·BitRev_7(i)+1} mod q for i = 0,...,127 are listed in
-    Appendix A of FIPS 203 (alternating positive and negative pairs).
-    They equal ZETAS[64 + i] (the second half of the ZETAS table starting
-    at index 64, which stores zeta^{BitRev_7(i)} for i = 0,...,127; the
-    required power is computed directly below).
+    The values γ_i = ζ^{2·BitRev_7(i)+1} mod q for i = 0,...,127 are listed
+    in the second table of Appendix A of FIPS 203 (17, −17, 2761, −2761, …).
+    They come in ± pairs, and each pair is related to the ZETAS table by
+
+        γ_{2j}   =  ZETAS[64 + j]   (mod q)
+        γ_{2j+1} = −ZETAS[64 + j]   (mod q)        for j = 0,...,63.
+
+    Rather than storing a second table, γ_i is computed directly below as
+    ZETAS[i]^2 · ζ mod q.
     """
     assert len(f_hat) == 256, "f_hat must have 256 coefficients"
     assert len(g_hat) == 256, "g_hat must have 256 coefficients"
@@ -627,11 +631,8 @@ def MultiplyNTTs(f_hat: List[int], g_hat: List[int]) -> List[int]:
     h_hat = [0] * 256
     for i in range(128):
         # γ = ζ^{2·BitRev_7(i) + 1} mod q
-        # The ZETAS array holds ζ^{BitRev_7(i)} at index i.
-        # Therefore ζ^{2·BitRev_7(i)+1} = ZETAS[i]^2 * ZETA mod q.
-        # Equivalently, from Appendix A second table:
-        # the values are ±ZETAS[64 + i] for i = 0,...,127.
-        # We compute directly using ZETAS[i] (= ζ^{BitRev_7(i)}):
+        # The ZETAS array holds ζ^{BitRev_7(i)} at index i, so
+        # ζ^{2·BitRev_7(i)+1} = (ζ^{BitRev_7(i)})^2 · ζ = ZETAS[i]^2 · ZETA mod q.
         gamma = (ZETAS[i] ** 2 * ZETA) % q    # = ζ^{2*BitRev_7(i)+1}
         h_hat[2 * i], h_hat[2 * i + 1] = BaseCaseMultiply(
             f_hat[2 * i], f_hat[2 * i + 1],
