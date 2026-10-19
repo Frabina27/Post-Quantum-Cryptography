@@ -8,8 +8,11 @@ dist/
 venv/
 .vscode/
 
-# Demo output
+# Demo output: never commit private keys, even throwaway ones.
+#
+# Deliberately NOT ignoring *.pem / *.der / *.crl repo-wide. This file applies
+# to the whole repository, and those globs would silently swallow another
+# module's certificate test fixtures -- git add would appear to do nothing, with
+# no error to explain why. The demo writes to a temp directory outside the repo
+# by default, so the narrow rule below is enough.
 keys/
-*.pem
-*.der
-*.crl

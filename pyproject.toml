@@ -24,7 +24,14 @@ pqpki-demo = "pqpki.cli:main"
 include = ["pqpki*"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+# No `testpaths`, deliberately. This is the only pytest config in a shared
+# group repository, so it governs a bare `pytest` run for every module here.
+# Pinning it to ["tests"] made this module's suite the only one collected and
+# silently skipped everyone else's -- no error, their tests simply stopped
+# running. Letting pytest discover from the repository root means a new module
+# is picked up automatically, with nobody needing to edit this file.
+#
+# To run just this module's suite: pytest tests
 addopts = "-ra --strict-markers"
 markers = [
     "interop: shells out to the openssl binary; skipped when OpenSSL 3.5+ is absent",
