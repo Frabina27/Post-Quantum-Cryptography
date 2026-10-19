@@ -55,6 +55,7 @@ from .errors import UnknownAlgorithmError, UnsupportedKeyTypeError
 
 __all__ = [
     "AlgorithmSpec",
+    "DEFAULT_ALGORITHM",
     "MetricEvent",
     "Collector",
     "get_algorithm",
@@ -311,6 +312,16 @@ def _verify_pure(pub: Any, signature: bytes, data: bytes) -> None:
 # --------------------------------------------------------------------------
 # The registry
 # --------------------------------------------------------------------------
+
+DEFAULT_ALGORITHM = "ml-dsa-65"
+"""The algorithm to use when a caller expresses no preference.
+
+Post-quantum by default, since demonstrating the PQ path is the point of this
+package. It lives here rather than at the call site because the set of
+algorithms and the choice of a default are the same concern: renaming or
+retiring an algorithm must not leave a dangling default somewhere else in the
+tree.
+"""
 
 _ML_DSA_44_OID = "2.16.840.1.101.3.4.3.17"
 _ML_DSA_65_OID = "2.16.840.1.101.3.4.3.18"

@@ -44,6 +44,7 @@ Do not use it to protect anything.
 from __future__ import annotations
 
 from .algorithms import (
+    DEFAULT_ALGORITHM,
     AlgorithmSpec,
     Collector,
     MetricEvent,
@@ -73,6 +74,7 @@ __version__ = "0.1.0"
 __all__ = [
     # algorithms
     "AlgorithmSpec",
+    "DEFAULT_ALGORITHM",
     "Collector",
     "MetricEvent",
     "get_algorithm",
