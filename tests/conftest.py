@@ -54,25 +54,36 @@ class Hierarchy:
         return [self.leaf, self.intermediate, self.root]
 
 
-def build_hierarchy(algorithm: str, *, collector=None) -> Hierarchy:
+def build_hierarchy(
+    algorithm: str, *, collector=None, name_prefix: str = "pqpki Test"
+) -> Hierarchy:
     """Build root -> intermediate -> leaf, all using ``algorithm``.
 
     This is the code path Phase 3 is about: nothing here mentions whether the
     algorithm is classical or post-quantum.
+
+    Args:
+        name_prefix: Distinguishes one hierarchy's subject names from
+            another's. This matters more than it looks: path building matches
+            issuer to subject *by name*, so two hierarchies built with the same
+            prefix are genuinely ambiguous to a validator, and a test that
+            means "a certificate from an unrelated CA" must pass a different
+            prefix or it will instead be testing signature failure against a
+            same-named impostor.
     """
     root_ca = CertificateAuthority.create_root(
-        "pqpki Test Root", algorithm, validity_days=3650, collector=collector
+        f"{name_prefix} Root", algorithm, validity_days=3650, collector=collector
     )
 
     intermediate_key = root_ca.algorithm.generate_key(collector=collector)
-    intermediate_csr = generate_csr("pqpki Test Intermediate", intermediate_key)
+    intermediate_csr = generate_csr(f"{name_prefix} Intermediate", intermediate_key)
     intermediate_cert = root_ca.issue_intermediate(intermediate_csr, validity_days=1825)
     intermediate_ca = CertificateAuthority(
         intermediate_cert, intermediate_key, collector=collector
     )
 
     leaf_key = root_ca.algorithm.generate_key(collector=collector)
-    leaf_csr = generate_csr("pqpki Test Leaf", leaf_key, san_dns=[LEAF_DNS_NAME])
+    leaf_csr = generate_csr(f"{name_prefix} Leaf", leaf_key, san_dns=[LEAF_DNS_NAME])
     leaf = intermediate_ca.issue_end_entity(leaf_csr, validity_days=90)
 
     return Hierarchy(algorithm, root_ca, intermediate_ca, leaf, leaf_key)

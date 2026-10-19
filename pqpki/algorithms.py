@@ -44,7 +44,7 @@ from typing import Any
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ec, mldsa, rsa
+from cryptography.hazmat.primitives.asymmetric import ec, mldsa, padding, rsa
 from cryptography.hazmat.primitives.asymmetric.types import (
     CertificateIssuerPrivateKeyTypes,
     PrivateKeyTypes,
@@ -176,6 +176,7 @@ class AlgorithmSpec:
         repr=False, compare=False
     )
     _identify: Callable[[Any], bool] = field(repr=False, compare=False)
+    _verify: Callable[[Any, bytes, bytes], None] = field(repr=False, compare=False)
 
     # -- signing seam ------------------------------------------------------
 
@@ -197,6 +198,37 @@ class AlgorithmSpec:
         here and nowhere else.
         """
         return (self.hash_algorithm,)
+
+    # -- verification seam -------------------------------------------------
+
+    def verify_signature(
+        self, public_key: PublicKeyTypes, signature: bytes, data: bytes
+    ) -> None:
+        """Verify ``signature`` over ``data`` using ``public_key``.
+
+        The mirror of :meth:`sign_args`, and the reason :mod:`pqpki.validate`
+        can check a signature at every link of a chain by hand without ever
+        branching on algorithm. Each family needs a differently shaped
+        ``verify()`` call -- ECDSA wants an ``ECDSA(hash)`` wrapper, RSA wants
+        a padding and a hash, pure ML-DSA wants neither -- and that difference
+        lives here and nowhere else.
+
+        Args:
+            public_key: The issuer's public key. Must belong to this
+                algorithm; a caller should have obtained this spec from
+                :func:`spec_for_key` on that very key.
+            signature: The raw signature bytes, e.g.
+                ``certificate.signature``.
+            data: The signed bytes, e.g.
+                ``certificate.tbs_certificate_bytes``.
+
+        Raises:
+            cryptography.exceptions.InvalidSignature: If the signature does
+                not verify. Returns ``None`` on success, following the
+                ``pyca`` convention -- a verification routine that returned a
+                bool would invite callers to ignore it.
+        """
+        self._verify(public_key, signature, data)
 
     # -- key generation ----------------------------------------------------
 
@@ -256,6 +288,27 @@ def _isinstance_of(cls: type) -> Callable[[Any], bool]:
 
 
 # --------------------------------------------------------------------------
+# Verification calls
+# --------------------------------------------------------------------------
+#
+# Each family spells verify() differently. Keeping the three shapes here is
+# what lets validate.py check every link of a chain with one call.
+
+
+def _verify_ecdsa(pub: Any, signature: bytes, data: bytes) -> None:
+    pub.verify(signature, data, ec.ECDSA(hashes.SHA256()))
+
+
+def _verify_rsa(pub: Any, signature: bytes, data: bytes) -> None:
+    pub.verify(signature, data, padding.PKCS1v15(), hashes.SHA256())
+
+
+def _verify_pure(pub: Any, signature: bytes, data: bytes) -> None:
+    """Pure ML-DSA: no pre-hash, and an empty context string, per RFC 9881."""
+    pub.verify(signature, data)
+
+
+# --------------------------------------------------------------------------
 # The registry
 # --------------------------------------------------------------------------
 
@@ -274,6 +327,7 @@ _REGISTRY: dict[str, AlgorithmSpec] = {
             _generate=lambda: ec.generate_private_key(ec.SECP256R1()),
             _hash_factory=hashes.SHA256,
             _identify=_is_ecdsa_p256,
+            _verify=_verify_ecdsa,
         ),
         AlgorithmSpec(
             name="rsa-2048",
@@ -285,6 +339,7 @@ _REGISTRY: dict[str, AlgorithmSpec] = {
             ),
             _hash_factory=hashes.SHA256,
             _identify=_is_rsa_2048,
+            _verify=_verify_rsa,
         ),
         AlgorithmSpec(
             name="ml-dsa-44",
@@ -294,6 +349,7 @@ _REGISTRY: dict[str, AlgorithmSpec] = {
             _generate=mldsa.MLDSA44PrivateKey.generate,
             _hash_factory=None,
             _identify=_isinstance_of(mldsa.MLDSA44PublicKey),
+            _verify=_verify_pure,
         ),
         AlgorithmSpec(
             name="ml-dsa-65",
@@ -303,6 +359,7 @@ _REGISTRY: dict[str, AlgorithmSpec] = {
             _generate=mldsa.MLDSA65PrivateKey.generate,
             _hash_factory=None,
             _identify=_isinstance_of(mldsa.MLDSA65PublicKey),
+            _verify=_verify_pure,
         ),
         AlgorithmSpec(
             name="ml-dsa-87",
@@ -312,6 +369,7 @@ _REGISTRY: dict[str, AlgorithmSpec] = {
             _generate=mldsa.MLDSA87PrivateKey.generate,
             _hash_factory=None,
             _identify=_isinstance_of(mldsa.MLDSA87PublicKey),
+            _verify=_verify_pure,
         ),
     )
 }

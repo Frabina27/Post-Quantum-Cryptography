@@ -65,6 +65,8 @@ from .errors import (
     UnsupportedKeyTypeError,
     ValidationInputError,
 )
+from .revocation import RevocationStatus, check_revocation
+from .validate import FailureCode, ValidationResult, validate_chain
 
 __version__ = "0.1.0"
 
@@ -80,6 +82,13 @@ __all__ = [
     # certificate signing requests
     "generate_csr",
     "verify_csr_signature",
+    # validation
+    "validate_chain",
+    "ValidationResult",
+    "FailureCode",
+    # revocation
+    "check_revocation",
+    "RevocationStatus",
     # errors
     "PQPKIError",
     "AlgorithmError",
