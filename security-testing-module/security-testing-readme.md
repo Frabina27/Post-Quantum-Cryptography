@@ -1,4 +1,4 @@
-Setup 
+## Setup 
 ### Mac
 -Run Inside of Terminal: 
     brew install cmake ninja
@@ -13,7 +13,7 @@ then:
     .venv\Scripts\activate
     pip install cryptography liboqs-python
 
-Executing Test 
+
 ## Run the tests
 -Inside of Terminal: 
     Macbook: source .venv/bin/activate 
