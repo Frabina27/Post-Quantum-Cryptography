@@ -1,0 +1,7 @@
+Category,Scheme Name,Security Type,Public Key Bytes,Private Key Bytes,Ciphertext/Sig Bytes,KeyGen Mean ms,Primary Op Name,Primary Op Mean ms,Secondary Op Name,Secondary Op Mean ms
+Key Exchange / KEM,Classical X25519,Classical (128-bit),32,48,32,0.0392,ECDH-Encap,0.0696,ECDH-Decap,0.0307
+Key Exchange / KEM,PQ ML-KEM-768,Post-Quantum (Category 3),1184,86,1088,0.1854,Encap,0.0516,Decap,0.0748
+Key Exchange / KEM,Hybrid X25519 + ML-KEM-768,Hybrid (Dual-Protected),1227,134,1130,0.2545,Hybrid Encap,0.1603,Hybrid Decap,0.1170
+Digital Signature,Classical ECDSA P-256,Classical (128-bit),91,138,71,0.0218,Sign,0.0311,Verify,0.0679
+Digital Signature,PQ ML-DSA-65,Post-Quantum (Category 3),1952,54,3309,0.2333,Sign,1.3224,Verify,0.2490
+Digital Signature,Hybrid ECDSA + ML-DSA-65,Hybrid (Dual-Protected),2054,192,3390,0.2871,Hybrid Sign,1.3055,Hybrid Verify,0.3678

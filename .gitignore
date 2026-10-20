@@ -31,7 +31,6 @@ coverage.xml
 *.cover
 *.py,cover
 .hypothesis/
-results/
 pytest.ini
 
 # IDEs and Editors
