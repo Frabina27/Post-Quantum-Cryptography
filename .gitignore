@@ -31,7 +31,6 @@ coverage.xml
 *.cover
 *.py,cover
 .hypothesis/
-pytest.ini
 
 # IDEs and Editors
 .vscode/
@@ -54,7 +53,14 @@ temp/
 *.log
 _oqs/
 
-# Sensitive key material (do not commit exported private keys)
+# Key material: never commit private keys, even throwaway demo ones.
+#
+# Deliberately NOT ignoring *.pem / *.der / *.crl repo-wide. This file applies
+# to the whole repository, and those globs would silently swallow another
+# module's certificate test fixtures -- git add would appear to do nothing,
+# with no error to explain why. The demo writes to a temp directory outside
+# the repo by default; keys/ catches it if pointed inside. The two globs
+# below only match obvious private-key filenames.
 keys/
 *.key
 *private*.pem
