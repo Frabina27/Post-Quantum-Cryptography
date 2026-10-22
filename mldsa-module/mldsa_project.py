@@ -1,27 +1,3 @@
-"""
-ML-DSA (Dilithium) implementation and benchmark for a Data & Applications Security project.
-
-Implements:
-1. ML-DSA key generation
-2. Message signing
-3. Signature verification
-4. Tampered-message testing
-5. Tampered-signature testing
-6. Wrong-public-key testing
-7. Truncated-signature testing
-8. Performance benchmarking
-9. Key/signature size measurement
-10. CSV export for comparison with RSA/ECC
-
-Dependency:
-    pip install liboqs-python
-
-Examples:
-    python mldsa_project.py
-    python mldsa_project.py --algorithm ML-DSA-65 --iterations 2000
-    python mldsa_project.py --all --iterations 1000
-"""
-
 from __future__ import annotations
 
 import argparse
