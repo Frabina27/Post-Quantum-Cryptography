@@ -1,0 +1,12 @@
+# python dependencies cause it sucks
+.venv
+__pycache__
+
+# ignore keys and certs
+*.key
+*.crt
+*.csr
+*.pem
+*.sig
+*.srl
+pki_store/
