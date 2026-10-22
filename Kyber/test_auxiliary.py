@@ -1,10 +1,5 @@
-"""
-Unit tests for Kyber/auxiliary.py (FIPS 203 Section 4 Auxiliary Algorithms).
-
-Can be run directly or via unittest / pytest:
-    python Kyber/test_auxiliary.py
-    python -m unittest discover -s Kyber -v
-"""
+# Tests for auxiliary.py
+# run with:  python -m unittest discover -s Kyber -v
 
 import hashlib
 import os
@@ -12,140 +7,108 @@ import random
 import sys
 import unittest
 
-# Ensure imports work regardless of current working directory
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from auxiliary import (
-    n,
-    q,
-    ZETA,
-    ZETAS,
-    _bit_rev_7,
-    PRF,
-    H,
-    J,
-    G,
-    XOF,
-    BitsToBytes,
-    BytesToBits,
-    ByteEncode,
-    ByteDecode,
-    Compress,
-    Decompress,
-    SampleNTT,
-    SamplePolyCBD,
-    NTT,
-    NTT_inv,
-    BaseCaseMultiply,
-    MultiplyNTTs,
-    poly_add,
-    poly_sub,
-    vec_add,
-    mat_vec_mul,
-    mat_T_vec_mul,
-    inner_product,
-    ntt_vec,
-    intt_vec,
+    n, q, ZETA, ZETAS, _bit_rev_7,
+    PRF, H, J, G, XOF,
+    BitsToBytes, BytesToBits, ByteEncode, ByteDecode, Compress, Decompress,
+    SampleNTT, SamplePolyCBD,
+    NTT, NTT_inv, BaseCaseMultiply, MultiplyNTTs,
+    poly_add, poly_sub, vec_add, mat_vec_mul, mat_T_vec_mul, inner_product,
+    ntt_vec, intt_vec,
 )
 
 
-def _poly_mul_schoolbook(a, b):
-    """Reference schoolbook multiplication in R_q = Z_q[X] / (X^256 + 1)."""
-    result = [0] * 256
+def schoolbook_mul(a, b):
+    # slow multiplication in Z_q[X]/(X^256 + 1) to check the NTT against
+    res = [0] * 256
     for i in range(256):
         for j in range(256):
-            coeff = (a[i] * b[j]) % q
-            idx = (i + j) % 256
-            sign = -1 if (i + j) >= 256 else 1
-            result[idx] = (result[idx] + sign * coeff) % q
-    return result
+            prod = a[i] * b[j]
+            if i + j >= 256:
+                res[i + j - 256] -= prod
+            else:
+                res[i + j] += prod
+    return [x % q for x in res]
 
 
-class TestConstantsAndBitRev(unittest.TestCase):
-    """Tests for Section 2.3 global constants, _bit_rev_7, and Appendix A ZETAS."""
+def rand_poly(rng, m=q):
+    return [rng.randrange(m) for _ in range(256)]
 
-    def test_global_constants(self):
+
+class TestConstants(unittest.TestCase):
+
+    def test_constants(self):
         self.assertEqual(n, 256)
         self.assertEqual(q, 3329)
         self.assertEqual(ZETA, 17)
-        # 17 is a primitive 256th root of unity mod 3329: 17^128 ≡ -1 (mod 3329)
+        # 17 should be a primitive 256th root of unity mod q
         self.assertEqual(pow(ZETA, 128, q), q - 1)
         self.assertEqual(pow(ZETA, 256, q), 1)
-        for k in range(1, 256):
-            self.assertNotEqual(pow(ZETA, k, q), 1)
+        for e in range(1, 256):
+            self.assertNotEqual(pow(ZETA, e, q), 1)
 
-    def test_bit_rev_7_known_values_and_involution(self):
+    def test_bit_rev(self):
         self.assertEqual(_bit_rev_7(0), 0)
         self.assertEqual(_bit_rev_7(1), 64)
         self.assertEqual(_bit_rev_7(64), 1)
         self.assertEqual(_bit_rev_7(127), 127)
         self.assertEqual(_bit_rev_7(0b0000011), 0b1100000)
 
-        seen = set()
+        # should be a permutation that undoes itself
+        outputs = set()
         for r in range(128):
             rev = _bit_rev_7(r)
             self.assertTrue(0 <= rev < 128)
             self.assertEqual(_bit_rev_7(rev), r)
-            seen.add(rev)
-        self.assertEqual(len(seen), 128)
+            outputs.add(rev)
+        self.assertEqual(len(outputs), 128)
 
-    def test_zetas_table_matches_formula(self):
+    def test_zetas_table(self):
         self.assertEqual(len(ZETAS), 128)
         for i in range(128):
-            expected = pow(ZETA, _bit_rev_7(i), q)
-            self.assertEqual(ZETAS[i], expected, f"Mismatch at ZETAS[{i}]")
+            self.assertEqual(ZETAS[i], pow(ZETA, _bit_rev_7(i), q), f"ZETAS[{i}]")
 
 
-class TestCryptographicFunctions(unittest.TestCase):
-    """Tests for Section 4.1 cryptographic functions (PRF, H, J, G, XOF)."""
+class TestHashes(unittest.TestCase):
 
-    def test_prf_output_lengths_and_values(self):
+    def test_prf(self):
         seed = bytes(range(32))
         for eta in (2, 3):
-            for b_val in (0, 1, 127, 255):
-                out = PRF(eta, seed, b_val)
+            for b in (0, 1, 127, 255):
+                out = PRF(eta, seed, b)
                 self.assertEqual(len(out), 64 * eta)
-                expected = hashlib.shake_256(seed + bytes([b_val])).digest(64 * eta)
-                self.assertEqual(out, expected)
+                self.assertEqual(out, hashlib.shake_256(seed + bytes([b])).digest(64 * eta))
 
-    def test_prf_domain_separation(self):
-        seed1 = b"\x01" * 32
-        seed2 = b"\x02" * 32
-        self.assertNotEqual(PRF(2, seed1, 0), PRF(2, seed1, 1))
-        self.assertNotEqual(PRF(2, seed1, 0), PRF(2, seed2, 0))
-        self.assertEqual(PRF(2, seed1, 0), PRF(3, seed1, 0)[:128])
+    def test_prf_different_inputs(self):
+        s1 = b"\x01" * 32
+        s2 = b"\x02" * 32
+        self.assertNotEqual(PRF(2, s1, 0), PRF(2, s1, 1))
+        self.assertNotEqual(PRF(2, s1, 0), PRF(2, s2, 0))
+        # eta only changes the output length
+        self.assertEqual(PRF(2, s1, 0), PRF(3, s1, 0)[:128])
 
-    def test_prf_invalid_inputs(self):
-        valid_seed = b"\x00" * 32
-        with self.assertRaises(AssertionError):
-            PRF(1, valid_seed, 0)
-        with self.assertRaises(AssertionError):
-            PRF(4, valid_seed, 0)
-        with self.assertRaises(AssertionError):
-            PRF(2, b"short", 0)
-        with self.assertRaises(AssertionError):
-            PRF(2, valid_seed, -1)
-        with self.assertRaises(AssertionError):
-            PRF(2, valid_seed, 256)
+    def test_prf_bad_args(self):
+        seed = bytes(32)
+        bad_calls = [(1, seed, 0), (4, seed, 0), (2, b"short", 0),
+                     (2, seed, -1), (2, seed, 256)]
+        for args in bad_calls:
+            with self.assertRaises(AssertionError):
+                PRF(*args)
 
-    def test_h_sha3_256(self):
-        # NIST empty-message vector for SHA3-256
-        empty_expected = bytes.fromhex(
-            "a7ffc6f8bf1ed76651c14756a061d662f580ff4de43b49fa82d80a4b80f8434a"
-        )
-        self.assertEqual(H(b""), empty_expected)
-
+    def test_h(self):
+        # SHA3-256("") from the NIST examples
+        self.assertEqual(H(b"").hex(),
+                         "a7ffc6f8bf1ed76651c14756a061d662f580ff4de43b49fa82d80a4b80f8434a")
         msg = b"ML-KEM FIPS 203 test input"
-        self.assertEqual(len(H(msg)), 32)
         self.assertEqual(H(msg), hashlib.sha3_256(msg).digest())
 
-    def test_j_shake256(self):
+    def test_j(self):
         for msg in (b"", b"abc", b"\xff" * 100):
-            out = J(msg)
-            self.assertEqual(len(out), 32)
-            self.assertEqual(out, hashlib.shake_256(msg).digest(32))
+            self.assertEqual(J(msg), hashlib.shake_256(msg).digest(32))
 
-    def test_g_sha3_512_split(self):
+    def test_g(self):
         for msg in (b"", b"seed_and_rank", os.urandom(33)):
             a, b = G(msg)
             self.assertEqual(len(a), 32)
@@ -153,48 +116,44 @@ class TestCryptographicFunctions(unittest.TestCase):
             self.assertNotEqual(a, b)
             self.assertEqual(a + b, hashlib.sha3_512(msg).digest())
 
-    def test_xof_streaming_absorb_and_squeeze(self):
+    def test_xof_squeeze_in_pieces(self):
         data = b"0123456789abcdef" * 2 + b"\x01\x02"
-        expected_stream = hashlib.shake_128(data).digest(60)
+        expected = hashlib.shake_128(data).digest(60)
 
-        # Single absorb, multiple incremental squeezes
-        xof1 = XOF()
-        xof1.absorb(data)
-        chunks = [xof1.squeeze(3) for _ in range(20)]
-        self.assertEqual(b"".join(chunks), expected_stream)
+        x = XOF()
+        x.absorb(data)
+        self.assertEqual(b"".join(x.squeeze(3) for _ in range(20)), expected)
 
-        # Multiple absorbs, mixed-size squeezes
-        xof2 = XOF()
-        xof2.absorb(data[:10])
-        xof2.absorb(data[10:25])
-        xof2.absorb(data[25:])
-        part1 = xof2.squeeze(17)
-        part2 = xof2.squeeze(43)
-        self.assertEqual(part1 + part2, expected_stream)
+        # absorbing in chunks + uneven squeezes should give the same stream
+        x = XOF()
+        x.absorb(data[:10])
+        x.absorb(data[10:25])
+        x.absorb(data[25:])
+        self.assertEqual(x.squeeze(17) + x.squeeze(43), expected)
 
-    def test_xof_absorb_after_squeeze_disallowed(self):
-        xof = XOF()
-        xof.absorb(b"initial")
-        xof.squeeze(3)
+    def test_xof_no_absorb_after_squeeze(self):
+        x = XOF()
+        x.absorb(b"initial")
+        x.squeeze(3)
         with self.assertRaises(AssertionError):
-            xof.absorb(b"more data")
+            x.absorb(b"more data")
 
 
-class TestConversionAndCompression(unittest.TestCase):
-    """Tests for Section 4.2.1 conversion and compression algorithms."""
+class TestEncoding(unittest.TestCase):
 
-    def test_bits_to_bytes_and_bytes_to_bits_known_vectors(self):
+    def test_bits_bytes_known(self):
         self.assertEqual(BitsToBytes([]), b"")
         self.assertEqual(BytesToBits(b""), [])
 
-        # Little-endian bit order within each byte
-        self.assertEqual(BitsToBytes([1, 0, 0, 0, 0, 0, 0, 0]), b"\x01")
-        self.assertEqual(BitsToBytes([0, 0, 0, 0, 0, 0, 0, 1]), b"\x80")
-        self.assertEqual(BitsToBytes([1, 1, 0, 1, 0, 0, 0, 0]), b"\x0b")
-
-        self.assertEqual(BytesToBits(b"\x01"), [1, 0, 0, 0, 0, 0, 0, 0])
-        self.assertEqual(BytesToBits(b"\x80"), [0, 0, 0, 0, 0, 0, 0, 1])
-        self.assertEqual(BytesToBits(b"\x0b"), [1, 1, 0, 1, 0, 0, 0, 0])
+        # least significant bit comes first
+        cases = [
+            (b"\x01", [1, 0, 0, 0, 0, 0, 0, 0]),
+            (b"\x80", [0, 0, 0, 0, 0, 0, 0, 1]),
+            (b"\x0b", [1, 1, 0, 1, 0, 0, 0, 0]),
+        ]
+        for byte, bits in cases:
+            self.assertEqual(BitsToBytes(bits), byte)
+            self.assertEqual(BytesToBits(byte), bits)
 
     def test_bits_bytes_roundtrip(self):
         rng = random.Random(42)
@@ -202,45 +161,38 @@ class TestConversionAndCompression(unittest.TestCase):
             raw = bytes(rng.randrange(256) for _ in range(length))
             bits = BytesToBits(raw)
             self.assertEqual(len(bits), 8 * length)
-            self.assertTrue(all(b in (0, 1) for b in bits))
+            self.assertTrue(set(bits) <= {0, 1})
             self.assertEqual(BitsToBytes(bits), raw)
 
-    def test_bits_to_bytes_invalid_length(self):
-        for bad_len in (1, 7, 9, 15):
+    def test_bits_to_bytes_bad_length(self):
+        for bad in (1, 7, 9, 15):
             with self.assertRaises(AssertionError):
-                BitsToBytes([0] * bad_len)
+                BitsToBytes([0] * bad)
 
-    def test_byte_encode_decode_roundtrip_all_d(self):
+    def test_byte_encode_decode(self):
         rng = random.Random(12345)
         for d in range(1, 13):
-            m = (1 << d) if d < 12 else q
+            m = q if d == 12 else 1 << d
 
-            # All zeros
             zeros = [0] * 256
-            enc_zeros = ByteEncode(zeros, d)
-            self.assertEqual(len(enc_zeros), 32 * d)
-            self.assertEqual(enc_zeros, b"\x00" * (32 * d))
-            self.assertEqual(ByteDecode(enc_zeros, d), zeros)
+            enc = ByteEncode(zeros, d)
+            self.assertEqual(enc, bytes(32 * d))
+            self.assertEqual(ByteDecode(enc, d), zeros)
 
-            # Max valid values (m - 1)
-            max_vals = [m - 1] * 256
-            self.assertEqual(ByteDecode(ByteEncode(max_vals, d), d), max_vals)
+            biggest = [m - 1] * 256
+            self.assertEqual(ByteDecode(ByteEncode(biggest, d), d), biggest)
 
-            # Random valid polynomial
-            poly = [rng.randrange(m) for _ in range(256)]
-            encoded = ByteEncode(poly, d)
-            self.assertEqual(len(encoded), 32 * d)
-            decoded = ByteDecode(encoded, d)
-            self.assertEqual(decoded, poly)
+            poly = rand_poly(rng, m)
+            enc = ByteEncode(poly, d)
+            self.assertEqual(len(enc), 32 * d)
+            self.assertEqual(ByteDecode(enc, d), poly)
 
-    def test_byte_decode_d12_reduces_mod_q(self):
-        # 0xFF bytes give 12-bit integers equal to 4095; ByteDecode_12 reduces mod q (4095 % 3329 = 766)
-        all_ones = b"\xff" * (32 * 12)
-        decoded = ByteDecode(all_ones, 12)
-        self.assertEqual(len(decoded), 256)
-        self.assertTrue(all(x == 4095 % q for x in decoded))
+    def test_byte_decode_12_reduces(self):
+        # all 1 bits -> every value is 4095, which should get reduced mod q
+        out = ByteDecode(b"\xff" * (32 * 12), 12)
+        self.assertEqual(out, [4095 % q] * 256)
 
-    def test_byte_encode_decode_invalid_arguments(self):
+    def test_byte_encode_decode_bad_args(self):
         with self.assertRaises(AssertionError):
             ByteEncode([0] * 256, 0)
         with self.assertRaises(AssertionError):
@@ -248,72 +200,67 @@ class TestConversionAndCompression(unittest.TestCase):
         with self.assertRaises(AssertionError):
             ByteEncode([0] * 255, 4)
         with self.assertRaises(AssertionError):
-            ByteDecode(b"\x00" * 31, 1)
+            ByteDecode(bytes(31), 1)
         with self.assertRaises(AssertionError):
-            ByteDecode(b"\x00" * 32, 0)
+            ByteDecode(bytes(32), 0)
         with self.assertRaises(AssertionError):
-            ByteDecode(b"\x00" * (32 * 13), 13)
+            ByteDecode(bytes(32 * 13), 13)
 
-    def test_compress_decompress_exact_roundtrip(self):
-        # Property from FIPS 203 Section 4.2.1: Compress_d(Decompress_d(y)) == y for all d in 1..11
+    def test_compress_decompress_roundtrip(self):
+        # Compress(Decompress(y)) == y should hold for every y and d < 12
         for d in range(1, 12):
-            two_d = 1 << d
-            for y in range(two_d):
-                decomp = Decompress(y, d)
-                self.assertTrue(0 <= decomp < q)
-                comp = Compress(decomp, d)
-                self.assertEqual(comp, y, f"Failed for d={d}, y={y}")
+            for y in range(1 << d):
+                x = Decompress(y, d)
+                self.assertTrue(0 <= x < q)
+                self.assertEqual(Compress(x, d), y, f"d={d}, y={y}")
 
-    def test_compress_decompress_error_bound(self):
-        # For any x in Z_q, |Decompress_d(Compress_d(x)) - x mod+- q| <= round(q / 2^(d+1))
+    def test_compress_error(self):
+        # going the other way loses info, but the error should be at most
+        # about q / 2^(d+1)
         for d in range(1, 12):
-            two_d = 1 << d
-            max_err = (q + two_d) // (2 * two_d)
+            max_err = (q + (1 << d)) // (2 << d)
             for x in range(0, q, 7):
                 y = Compress(x, d)
-                self.assertTrue(0 <= y < two_d)
-                x_prime = Decompress(y, d)
-                diff = (x_prime - x) % q
-                signed_diff = diff if diff <= q // 2 else diff - q
-                self.assertLessEqual(abs(signed_diff), max_err)
+                self.assertTrue(0 <= y < (1 << d))
+                diff = (Decompress(y, d) - x) % q
+                if diff > q // 2:
+                    diff -= q
+                self.assertLessEqual(abs(diff), max_err)
 
-    def test_compress_decompress_d1_known_values(self):
+    def test_compress_d1(self):
         self.assertEqual(Decompress(0, 1), 0)
-        self.assertEqual(Decompress(1, 1), 1665)  # ceil(3329 / 2) = 1665
+        self.assertEqual(Decompress(1, 1), 1665)
         self.assertEqual(Compress(0, 1), 0)
         self.assertEqual(Compress(1665, 1), 1)
         self.assertEqual(Compress(q - 1, 1), 0)
 
-    def test_compress_decompress_invalid_d(self):
-        for bad_d in (0, 12, 13):
+    def test_compress_bad_d(self):
+        for d in (0, 12, 13):
             with self.assertRaises(AssertionError):
-                Compress(0, bad_d)
+                Compress(0, d)
             with self.assertRaises(AssertionError):
-                Decompress(0, bad_d)
+                Decompress(0, d)
 
 
-class TestSamplingAlgorithms(unittest.TestCase):
-    """Tests for Section 4.2.2 sampling algorithms (SampleNTT, SamplePolyCBD)."""
+class TestSampling(unittest.TestCase):
 
-    def test_sample_ntt_range_and_determinism(self):
+    def test_sample_ntt_basic(self):
         seed = bytes(range(32))
-        b00 = seed + bytes([0, 0])
-        b01 = seed + bytes([0, 1])
+        a = SampleNTT(seed + b"\x00\x00")
+        self.assertEqual(len(a), 256)
+        self.assertTrue(all(0 <= x < q for x in a))
+        self.assertEqual(SampleNTT(seed + b"\x00\x00"), a)
+        self.assertNotEqual(SampleNTT(seed + b"\x00\x01"), a)
 
-        a00 = SampleNTT(b00)
-        self.assertEqual(len(a00), 256)
-        self.assertTrue(all(0 <= coeff < q for coeff in a00))
-        self.assertEqual(SampleNTT(b00), a00)
-        self.assertNotEqual(SampleNTT(b01), a00)
-
-    def test_sample_ntt_matches_manual_rejection_sampling(self):
+    def test_sample_ntt_against_manual(self):
+        # redo the rejection sampling by hand straight from the SHAKE output
         B = b"\x42" * 32 + b"\x01\x02"
         stream = hashlib.shake_128(B).digest(1024)
         expected = []
-        pos = 0
+        i = 0
         while len(expected) < 256:
-            c0, c1, c2 = stream[pos], stream[pos + 1], stream[pos + 2]
-            pos += 3
+            c0, c1, c2 = stream[i:i + 3]
+            i += 3
             d1 = c0 + 256 * (c1 % 16)
             d2 = (c1 // 16) + 16 * c2
             if d1 < q:
@@ -322,164 +269,123 @@ class TestSamplingAlgorithms(unittest.TestCase):
                 expected.append(d2)
         self.assertEqual(SampleNTT(B), expected)
 
-    def test_sample_ntt_invalid_length(self):
-        with self.assertRaises(AssertionError):
-            SampleNTT(b"\x00" * 33)
-        with self.assertRaises(AssertionError):
-            SampleNTT(b"\x00" * 35)
+    def test_sample_ntt_bad_length(self):
+        for size in (33, 35):
+            with self.assertRaises(AssertionError):
+                SampleNTT(bytes(size))
 
-    def test_sample_poly_cbd_ranges_and_edge_cases(self):
+    def test_cbd_range(self):
         for eta in (2, 3):
-            # All-zero input -> all-zero polynomial
-            zeros = SamplePolyCBD(b"\x00" * (64 * eta), eta)
-            self.assertEqual(zeros, [0] * 256)
+            # all zeros, and all ones (x = y = eta), both cancel out to 0
+            self.assertEqual(SamplePolyCBD(bytes(64 * eta), eta), [0] * 256)
+            self.assertEqual(SamplePolyCBD(b"\xff" * (64 * eta), eta), [0] * 256)
 
-            # All-0xFF input -> x = eta, y = eta -> x - y = 0 for all coefficients
-            ones = SamplePolyCBD(b"\xff" * (64 * eta), eta)
-            self.assertEqual(ones, [0] * 256)
-
-            # Random input -> coefficients in [0, eta] or [q - eta, q - 1]
-            prf_bytes = PRF(eta, bytes(range(32)), 0)
-            poly = SamplePolyCBD(prf_bytes, eta)
+            poly = SamplePolyCBD(PRF(eta, bytes(range(32)), 0), eta)
             self.assertEqual(len(poly), 256)
             for c in poly:
-                self.assertTrue(
-                    (0 <= c <= eta) or (q - eta <= c < q),
-                    f"Coefficient {c} out of range for eta={eta}",
-                )
+                self.assertTrue(c <= eta or c >= q - eta, f"{c} out of range (eta={eta})")
 
-    def test_sample_poly_cbd_known_byte_pattern_eta2(self):
-        # For eta=2, each 4-bit nibble produces one coefficient:
-        # low 2 bits sum to x, high 2 bits sum to y, coeff = (x - y) mod q.
-        # Byte 0x33 = 0b0011_0011 -> nibble 0 is 0b0011 (x=2, y=0 -> 2), nibble 1 is 0b0011 (x=2, y=0 -> 2)
-        # Byte 0xCC = 0b1100_1100 -> nibble 0 is 0b1100 (x=0, y=2 -> q-2), nibble 1 is 0b1100 (x=0, y=2 -> q-2)
-        buf = b"\x33" + b"\xcc" + b"\x00" * 126
+    def test_cbd_eta2_by_hand(self):
+        # with eta=2 each nibble is one coefficient: low 2 bits - high 2 bits
+        #   0x33 -> 0011 0011 -> 2, 2
+        #   0xcc -> 1100 1100 -> -2, -2
+        buf = b"\x33\xcc" + bytes(126)
         poly = SamplePolyCBD(buf, 2)
-        self.assertEqual(poly[0], 2)
-        self.assertEqual(poly[1], 2)
-        self.assertEqual(poly[2], q - 2)
-        self.assertEqual(poly[3], q - 2)
+        self.assertEqual(poly[:4], [2, 2, q - 2, q - 2])
         self.assertEqual(poly[4:], [0] * 252)
 
-    def test_sample_poly_cbd_invalid_inputs(self):
+    def test_cbd_bad_args(self):
         with self.assertRaises(AssertionError):
-            SamplePolyCBD(b"\x00" * 128, 1)
+            SamplePolyCBD(bytes(128), 1)
         with self.assertRaises(AssertionError):
-            SamplePolyCBD(b"\x00" * 128, 3)
+            SamplePolyCBD(bytes(128), 3)
         with self.assertRaises(AssertionError):
-            SamplePolyCBD(b"\x00" * 192, 2)
+            SamplePolyCBD(bytes(192), 2)
 
 
-class TestNTTAndPolynomialArithmetic(unittest.TestCase):
-    """Tests for Section 4.3 NTT, NTT_inv, MultiplyNTTs, and vector/matrix operations."""
+class TestNTT(unittest.TestCase):
 
-    def test_ntt_roundtrip_and_immutability(self):
+    def test_roundtrip(self):
         rng = random.Random(99)
-        f = [rng.randrange(q) for _ in range(256)]
-        f_copy = list(f)
+        f = rand_poly(rng)
+        f_orig = list(f)
 
         f_hat = NTT(f)
-        self.assertEqual(f, f_copy, "NTT should not mutate input")
+        self.assertEqual(f, f_orig, "NTT modified its input")
         self.assertEqual(len(f_hat), 256)
         self.assertTrue(all(0 <= x < q for x in f_hat))
 
-        f_hat_copy = list(f_hat)
-        recovered = NTT_inv(f_hat)
-        self.assertEqual(f_hat, f_hat_copy, "NTT_inv should not mutate input")
-        self.assertEqual(recovered, f)
+        f_hat_orig = list(f_hat)
+        back = NTT_inv(f_hat)
+        self.assertEqual(f_hat, f_hat_orig, "NTT_inv modified its input")
+        self.assertEqual(back, f)
 
-    def test_ntt_zero_and_one_polynomials(self):
+    def test_zero_and_one(self):
         zero = [0] * 256
         self.assertEqual(NTT(zero), zero)
         self.assertEqual(NTT_inv(zero), zero)
 
-        # Constant polynomial 1 has residue (1 + 0*X) mod (X^2 - gamma_i) in all 128 factors
+        # 1 mod (X^2 - gamma) is just 1 for every factor, so NTT(1) = [1, 0, 1, 0, ...]
         one = [1] + [0] * 255
-        one_hat = [1 if i % 2 == 0 else 0 for i in range(256)]
+        one_hat = [1, 0] * 128
         self.assertEqual(NTT(one), one_hat)
         self.assertEqual(NTT_inv(one_hat), one)
 
-    def test_ntt_linearity(self):
+    def test_linear(self):
         rng = random.Random(2024)
-        f = [rng.randrange(q) for _ in range(256)]
-        g = [rng.randrange(q) for _ in range(256)]
-        scalar = 1234
+        f = rand_poly(rng)
+        g = rand_poly(rng)
+        self.assertEqual(NTT(poly_add(f, g)), poly_add(NTT(f), NTT(g)))
 
-        lhs = NTT(poly_add(f, g))
-        rhs = poly_add(NTT(f), NTT(g))
-        self.assertEqual(lhs, rhs)
-
-        scaled_f = [(scalar * c) % q for c in f]
-        scaled_f_hat = [(scalar * c) % q for c in NTT(f)]
-        self.assertEqual(NTT(scaled_f), scaled_f_hat)
+        c = 1234
+        self.assertEqual(NTT([c * x % q for x in f]), [c * x % q for x in NTT(f)])
 
     def test_base_case_multiply(self):
-        # (a0 + a1*X)(b0 + b1*X) = (a0*b0 + a1*b1*gamma) + (a0*b1 + a1*b0)*X (mod X^2 - gamma, q)
         c0, c1 = BaseCaseMultiply(3, 5, 7, 11, 17)
         self.assertEqual(c0, (3 * 7 + 5 * 11 * 17) % q)
         self.assertEqual(c1, (3 * 11 + 5 * 7) % q)
 
-    def test_multiply_ntts_matches_schoolbook(self):
+    def test_multiply_matches_schoolbook(self):
         rng = random.Random(31415)
         for _ in range(5):
-            a = [rng.randrange(q) for _ in range(256)]
-            b = [rng.randrange(q) for _ in range(256)]
-            expected = _poly_mul_schoolbook(a, b)
-            actual = NTT_inv(MultiplyNTTs(NTT(a), NTT(b)))
-            self.assertEqual(actual, expected)
+            a = rand_poly(rng)
+            b = rand_poly(rng)
+            self.assertEqual(NTT_inv(MultiplyNTTs(NTT(a), NTT(b))), schoolbook_mul(a, b))
 
-    def test_multiply_ntts_algebraic_properties(self):
+    def test_multiply_ring_properties(self):
         rng = random.Random(2718)
-        a_hat = [rng.randrange(q) for _ in range(256)]
-        b_hat = [rng.randrange(q) for _ in range(256)]
-        c_hat = [rng.randrange(q) for _ in range(256)]
-        one_hat = NTT([1] + [0] * 255)
+        a, b, c = rand_poly(rng), rand_poly(rng), rand_poly(rng)
+        one = NTT([1] + [0] * 255)
+        mul = MultiplyNTTs
 
-        # Commutativity
-        self.assertEqual(MultiplyNTTs(a_hat, b_hat), MultiplyNTTs(b_hat, a_hat))
-        # Identity
-        self.assertEqual(MultiplyNTTs(a_hat, one_hat), a_hat)
-        # Associativity
-        self.assertEqual(
-            MultiplyNTTs(MultiplyNTTs(a_hat, b_hat), c_hat),
-            MultiplyNTTs(a_hat, MultiplyNTTs(b_hat, c_hat)),
-        )
-        # Distributivity over addition
-        self.assertEqual(
-            MultiplyNTTs(a_hat, poly_add(b_hat, c_hat)),
-            poly_add(MultiplyNTTs(a_hat, b_hat), MultiplyNTTs(a_hat, c_hat)),
-        )
+        self.assertEqual(mul(a, b), mul(b, a))
+        self.assertEqual(mul(a, one), a)
+        self.assertEqual(mul(mul(a, b), c), mul(a, mul(b, c)))
+        self.assertEqual(mul(a, poly_add(b, c)), poly_add(mul(a, b), mul(a, c)))
 
-    def test_poly_and_vector_matrix_helpers(self):
+    def test_vector_helpers(self):
         rng = random.Random(777)
         k = 3
-        u = [[rng.randrange(q) for _ in range(256)] for _ in range(k)]
-        v = [[rng.randrange(q) for _ in range(256)] for _ in range(k)]
+        u = [rand_poly(rng) for _ in range(k)]
+        v = [rand_poly(rng) for _ in range(k)]
 
-        # poly_add / poly_sub inverse
         for i in range(k):
             self.assertEqual(poly_sub(poly_add(u[i], v[i]), v[i]), u[i])
 
-        # ntt_vec / intt_vec roundtrip
         u_hat = ntt_vec(u)
         self.assertEqual(intt_vec(u_hat), u)
 
-        # vec_add
-        sum_vec = vec_add(u, v)
+        total = vec_add(u, v)
         for i in range(k):
-            self.assertEqual(sum_vec[i], poly_add(u[i], v[i]))
+            self.assertEqual(total[i], poly_add(u[i], v[i]))
 
-        # Transpose adjoint identity in T_q: <u_hat, A_hat * v_hat> == <A_hat^T * u_hat, v_hat>
-        A_hat = [
-            [[rng.randrange(q) for _ in range(256)] for _ in range(k)]
-            for _ in range(k)
-        ]
+        # <u, A v> should equal <A^T u, v>
+        A = [[rand_poly(rng) for _ in range(k)] for _ in range(k)]
         v_hat = ntt_vec(v)
-        lhs = inner_product(u_hat, mat_vec_mul(A_hat, v_hat))
-        rhs = inner_product(mat_T_vec_mul(A_hat, u_hat), v_hat)
-        self.assertEqual(lhs, rhs)
+        self.assertEqual(inner_product(u_hat, mat_vec_mul(A, v_hat)),
+                         inner_product(mat_T_vec_mul(A, u_hat), v_hat))
 
-    def test_ntt_and_multiply_invalid_lengths(self):
+    def test_bad_lengths(self):
         with self.assertRaises(AssertionError):
             NTT([0] * 255)
         with self.assertRaises(AssertionError):
