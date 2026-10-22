@@ -1,16 +1,8 @@
-"""
-Tests for the RSA Cryptographic Module.
-
-Run with:
-
-    python test_rsa.py
-"""
-
 from rsa_crypto import RSACrypto
 
 
 def test_key_generation():
-    """Test RSA key-pair generation."""
+
 
     rsa = RSACrypto(2048)
 
@@ -21,7 +13,7 @@ def test_key_generation():
 
 
 def test_encryption_decryption():
-    """Test RSA-OAEP encryption and decryption."""
+
 
     rsa = RSACrypto(2048)
 
@@ -38,7 +30,7 @@ def test_encryption_decryption():
 
 
 def test_signature():
-    """Test RSA-PSS signature generation and verification."""
+
 
     rsa = RSACrypto(2048)
 
@@ -54,10 +46,7 @@ def test_signature():
 
 
 def test_modified_message():
-    """
-    Verify that changing the original message causes
-    signature verification to fail.
-    """
+
 
     rsa = RSACrypto(2048)
 
@@ -77,9 +66,7 @@ def test_modified_message():
 
 
 def test_modified_signature():
-    """
-    Verify that a corrupted signature is rejected.
-    """
+
 
     rsa = RSACrypto(2048)
 
@@ -87,7 +74,7 @@ def test_modified_signature():
 
     signature = rsa.sign(message)
 
-    # Change one byte in the signature.
+
     corrupted_signature = bytearray(signature)
     corrupted_signature[0] ^= 1
     corrupted_signature = bytes(corrupted_signature)
@@ -103,7 +90,7 @@ def test_modified_signature():
 
 
 def test_3072_bit_rsa():
-    """Verify that RSA-3072 operations also work."""
+
 
     rsa = RSACrypto(3072)
 
@@ -127,7 +114,7 @@ def test_3072_bit_rsa():
 
 
 def test_key_serialization():
-    """Test public/private key PEM serialization."""
+
 
     rsa = RSACrypto(2048)
 

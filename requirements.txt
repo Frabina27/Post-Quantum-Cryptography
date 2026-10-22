@@ -1,2 +1,2 @@
 liboqs-python
-cryptography 
+cryptography>=50
