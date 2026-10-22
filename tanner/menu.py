@@ -1,40 +1,32 @@
-# ui stuff
-from rich.console import Console
-from rich.table import Table
-from rich.panel import Panel
+from menu_handlers import ca_menu, cert_menu, inspect_menu, revoke_menu, sign_menu
+from utils import console, get_choice, render_menu
 
-# choice hanglers
-from menu_handlers import menu_1
+MAIN_MENU_OPTIONS = [
+    ("1", "Certificate Authority (CA) Management"),
+    ("2", "Issue End-Entity Certificates"),
+    ("3", "Certificate Revocation & CRL"),
+    ("4", "Digital Signatures & Verification"),
+    ("5", "Inspect & Validate"),
+]
 
-# utils
-from utils import get_choice
-
-console = Console()
-
-def main_menu(): # build main menu
-    menu =  Table(show_header = False, box = None, padding = (0,2))
-    panel = Panel(menu, title = "[bold red]Classical PKI[/bold red]", subtitle = "[dim]Main Menu[/dim]")
-
-    menu.add_column("Option", style = "bold cyan", justify = "right")
-    menu.add_column("Selection", style = "white")
-
-    menu.add_row("[1]", "Generate Root Certificate")
-
-    menu.add_row("[0]", "Exit", style="red")
-
-    console.print(panel)
-
-def render(): # render main menu
+def render():
     console.clear()
     while True:
-        main_menu()
+        render_menu("Main Menu", MAIN_MENU_OPTIONS, back_text = "Exit")
 
-        match get_choice(1):
+        match get_choice(len(MAIN_MENU_OPTIONS)):
             case "0":
+                console.clear()
                 exit(0)
             case "1":
-                menu_1.render()
+                ca_menu.render()
+            case "2":
+                cert_menu.render()
+            case "3":
+                revoke_menu.render()
+            case "4":
+                sign_menu.render()
+            case "5":
+                inspect_menu.render()
 
-        console.print("\n[dim]Press Enter to return to the main menu...[/dim]")
-        input()
         console.clear()
