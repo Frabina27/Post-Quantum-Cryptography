@@ -6,19 +6,22 @@ Run it with either of::
     pqpki-demo
 
 It builds a complete hierarchy in a temporary directory, issues an end-entity
-certificate, validates the chain, revokes the certificate, and validates again
-to show the rejection and its named reason. Every certificate it produces is
+certificate, validates the chain, revokes the certificate and validates again
+to show the rejection and its named reason, publishes a delta CRL against a
+backlog of revocations, and reloads the CA from disk to show that its
+revocation state and CRL numbering survived. Every certificate it produces is
 real and parseable; you can point ``openssl`` at the files it leaves behind.
 
 The default algorithm is whatever :data:`pqpki.algorithms.DEFAULT_ALGORITHM`
-names, which is post-quantum, so the out-of-the-box run is the PQ one. Pass ``--algorithm`` to pick another, or ``--all`` to run the
-identical demo once per registered algorithm -- which is the clearest way to
-see that the classical and post-quantum paths really are the same code.
+names, which is post-quantum, so the out-of-the-box run is the PQ one. Pass
+``--algorithm`` to pick another, or ``--all`` to run the identical demo once
+per registered algorithm -- which is the clearest way to see that the classical
+and post-quantum paths really are the same code.
 
 This prints the metric events the instrumentation produced, so you can see that
-timings and artifact sizes are reachable. It does not aggregate, average, or
-compare them across runs: collecting and analysing measurements is the
-benchmarking module's job, not this one's.
+timings and artifact sizes are reachable. It deliberately does not aggregate or
+average them: a single run is not a measurement, and
+:mod:`pqpki.benchmark` is what turns these events into comparable numbers.
 """
 
 from __future__ import annotations
@@ -39,13 +42,30 @@ from .algorithms import (
     get_algorithm,
     list_algorithms,
 )
-from .ca import CertificateAuthority
+from .ca import (
+    CERT_FILENAME,
+    KEY_DIRNAME,
+    KEY_FILENAME,
+    STATE_FILENAME,
+    CertificateAuthority,
+)
 from .csr import generate_csr
+from .revocation import crl_number, delta_base_number
 from .validate import ValidationResult, validate_chain
 
 __all__ = ["main"]
 
 LEAF_DNS_NAME = "service.pqpki.example"
+
+#: Advertised in the issued certificates' CRLDistributionPoints and
+#: FreshestCRL. Nothing fetches these; they are there so that a certificate
+#: says where to look, which is what a real deployment does.
+CRL_URL = "http://crl.pqpki.example/intermediate.crl"
+DELTA_CRL_URL = "http://crl.pqpki.example/intermediate-delta.crl"
+
+#: Revocations put on the base CRL before the delta is published, so the delta
+#: has something to be smaller than. See stage 8.
+_BACKLOG = 200
 
 _RULE = "=" * 72
 _INDENT = " " * 6
@@ -61,6 +81,12 @@ def _detail(message: str) -> None:
 
 def _step(number: int, total: int, title: str) -> None:
     print(f"\n[{number}/{total}] {title}")
+
+
+def _entries(crl) -> str:
+    """``"1 entry"`` or ``"201 entries"``, so the output reads correctly."""
+    count = len(crl)
+    return f"{count} entr{'y' if count == 1 else 'ies'}"
 
 
 def _der_size(obj) -> int:
@@ -97,7 +123,7 @@ def run_demo(algorithm: str, directory: Path) -> bool:
     spec = get_algorithm(algorithm)
     events: list[MetricEvent] = []
     collect = events.append
-    total = 7
+    total = 9
 
     _say()
     _say(_RULE)
@@ -112,13 +138,20 @@ def run_demo(algorithm: str, directory: Path) -> bool:
     # -- 1. the root ------------------------------------------------------
     _step(1, total, "Creating a self-signed root CA")
     root_ca = CertificateAuthority.create_root(
-        "pqpki Demo Root", algorithm, validity_days=3650, collector=collect
+        "pqpki Demo Root",
+        algorithm,
+        validity_days=3650,
+        path_length=1,
+        collector=collect,
+        crl_url=CRL_URL,
+        delta_crl_url=DELTA_CRL_URL,
     )
     root = root_ca.certificate
     _detail(f"subject:     {root.subject.rfc4514_string()}")
     _detail(f"serial:      {root.serial_number:x}")
     _detail(f"certificate: {_der_size(root)} bytes DER")
     _detail(f"valid until: {root.not_valid_after_utc.date()}")
+    _detail(f"issued certs will point to {CRL_URL}")
 
     # -- 2. the intermediate ----------------------------------------------
     _step(2, total, "Issuing an intermediate CA from a CSR")
@@ -129,7 +162,11 @@ def run_demo(algorithm: str, directory: Path) -> bool:
         intermediate_csr, validity_days=1825, path_length=0
     )
     intermediate_ca = CertificateAuthority(
-        intermediate_cert, intermediate_key, collector=collect
+        intermediate_cert,
+        intermediate_key,
+        collector=collect,
+        crl_url=CRL_URL,
+        delta_crl_url=DELTA_CRL_URL,
     )
     _detail(f"subject:     {intermediate_cert.subject.rfc4514_string()}")
     _detail(f"certificate: {_der_size(intermediate_cert)} bytes DER")
@@ -146,6 +183,10 @@ def run_demo(algorithm: str, directory: Path) -> bool:
     _detail(f"SAN:         {LEAF_DNS_NAME}")
     _detail(f"serial:      {leaf.serial_number:x}")
     _detail(f"certificate: {_der_size(leaf)} bytes DER")
+    distribution = leaf.extensions.get_extension_for_class(
+        x509.CRLDistributionPoints
+    ).value
+    _detail(f"CRL at:      {distribution[0].full_name[0].value}")
 
     # -- 4. persist -------------------------------------------------------
     _step(4, total, "Writing the hierarchy to disk")
@@ -157,14 +198,17 @@ def run_demo(algorithm: str, directory: Path) -> bool:
     leaf_path.write_bytes(leaf.public_bytes(serialization.Encoding.PEM))
 
     for path in (
-        root_directory / "ca.crt",
-        root_directory / "keys" / "ca.key",
-        intermediate_directory / "ca.crt",
-        intermediate_directory / "keys" / "ca.key",
+        root_directory / CERT_FILENAME,
+        root_directory / KEY_DIRNAME / KEY_FILENAME,
+        root_directory / STATE_FILENAME,
+        intermediate_directory / CERT_FILENAME,
+        intermediate_directory / KEY_DIRNAME / KEY_FILENAME,
+        intermediate_directory / STATE_FILENAME,
         leaf_path,
     ):
         _detail(f"{path.relative_to(directory)}")
     _detail("private keys are in keys/ with mode 0600 (advisory on Windows)")
+    _detail("ca-state.json carries the revocation register and CRL counter")
 
     # -- 5. validate ------------------------------------------------------
     _step(5, total, "Validating the chain")
@@ -180,7 +224,7 @@ def run_demo(algorithm: str, directory: Path) -> bool:
     crl_path = directory / "intermediate.crl"
     crl_path.write_bytes(crl.public_bytes(serialization.Encoding.PEM))
     _detail("reason:   keyCompromise")
-    _detail(f"CRL:      {_der_size(crl)} bytes DER, {len(crl)} entry")
+    _detail(f"CRL:      {_der_size(crl)} bytes DER, {_entries(crl)}")
     _detail(f"signed with {spec.name}, same agility layer as a certificate")
     _detail(f"written:  {crl_path.relative_to(directory)}")
 
@@ -195,6 +239,57 @@ def run_demo(algorithm: str, directory: Path) -> bool:
     )
     _describe(after)
 
+    # -- 8. delta CRL -----------------------------------------------------
+    _step(8, total, "Publishing a delta CRL")
+    # Give the base CRL a realistic backlog first. A delta against an empty
+    # base is larger than the base, so demonstrating one without a backlog
+    # would show the opposite of the point.
+    for serial in range(1, _BACKLOG + 1):
+        intermediate_ca.revoke(serial, x509.ReasonFlags.superseded)
+    base_crl = intermediate_ca.publish_crl(validity_days=7)
+
+    intermediate_ca.revoke(_BACKLOG + 1, x509.ReasonFlags.cessation_of_operation)
+    delta_crl = intermediate_ca.publish_delta_crl(validity_days=1)
+    delta_path = directory / "intermediate-delta.crl"
+    delta_path.write_bytes(delta_crl.public_bytes(serialization.Encoding.PEM))
+
+    base_size = _der_size(base_crl)
+    delta_size = _der_size(delta_crl)
+    _detail(f"base CRL:  {_entries(base_crl)}, {base_size} bytes DER")
+    _detail(f"delta CRL: {_entries(delta_crl)}, {delta_size} bytes DER")
+    _detail(f"saving:    {100 * (1 - delta_size / base_size):.1f}% smaller")
+    _detail(f"relative to base CRL number {delta_base_number(delta_crl)} (critical)")
+    _detail(f"written:   {delta_path.relative_to(directory)}")
+
+    delta_alone = validate_chain(
+        leaf, [intermediate_cert], [root], crls=[delta_crl]
+    )
+    _detail("a delta supplied without its base is refused, not believed:")
+    for failure in delta_alone.failures:
+        if failure.startswith("crl-problem:"):
+            _detail(f"  {failure[:96]}")
+            break
+
+    # -- 9. reload --------------------------------------------------------
+    _step(9, total, "Reloading the intermediate CA from disk")
+    intermediate_ca.save(intermediate_directory)
+    reloaded = CertificateAuthority.load(
+        intermediate_directory / CERT_FILENAME,
+        intermediate_directory / KEY_DIRNAME / KEY_FILENAME,
+    )
+    _detail(f"revocations restored: {len(reloaded.revoked_serials)}")
+    _detail(f"CRL number continues from: {reloaded.crl_number}")
+    republished = reloaded.publish_crl(validity_days=7)
+    still_revoked = (
+        republished.get_revoked_certificate_by_serial_number(leaf.serial_number)
+        is not None
+    )
+    _detail(
+        f"republished CRL number {crl_number(republished)}, "
+        f"leaf still revoked: {still_revoked}"
+    )
+    _detail("numbering never goes backwards, so no CRL looks like a replay")
+
     # -- instrumentation --------------------------------------------------
     _say("\n  Metric events the collector received:")
     _say(f"  {'operation':<20} {'algorithm':<12} {'seconds':>9}  {'bytes':>7}")
@@ -206,8 +301,9 @@ def run_demo(algorithm: str, directory: Path) -> bool:
             f"{event.duration_s:>9.4f}  {size:>7}"
         )
     _say(
-        "\n  These are single measurements, not a benchmark. Aggregating them "
-        "is the\n  benchmarking module's job."
+        "\n  These are single measurements, not a benchmark: one run on a "
+        "loaded machine\n  says little. Run `python -m pqpki.benchmark` to "
+        "aggregate them over\n  repetitions and across every algorithm."
     )
 
     # -- did the demonstration actually demonstrate anything? -------------
