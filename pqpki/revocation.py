@@ -15,8 +15,19 @@ CRLs here are signed through the same agility layer as certificates, so a
 post-quantum CA publishes an ML-DSA-signed CRL and this module verifies it with
 no algorithm-specific code.
 
-What this deliberately does not do: no CRL distribution point fetching, no
-OCSP, no delta CRLs, and no caching. CRLs arrive as arguments.
+Delta CRLs are understood, and the rule governing them is the interesting part.
+A delta CRL lists only what changed since a specific complete CRL, identified
+by the ``DeltaCRLIndicator`` extension it carries. So a delta is never evidence
+on its own: reading one as though it were complete would make every serial that
+appears only in the base look unrevoked, which is strictly worse than having no
+CRL at all. This module therefore applies a delta only once it has the base
+CRL whose number the delta names, and reports an unmatched delta as a problem
+rather than using it.
+
+What this deliberately does not do: no CRL distribution point *fetching* (the
+URLs in a certificate are published by :mod:`pqpki.ca` and read by whoever
+holds the certificate, not dereferenced here), no OCSP, and no caching. CRLs
+arrive as arguments.
 """
 
 from __future__ import annotations
@@ -30,7 +41,40 @@ from cryptography.exceptions import InvalidSignature
 from .algorithms import spec_for_key
 from .errors import UnsupportedKeyTypeError
 
-__all__ = ["RevocationStatus", "crls_from_issuer", "check_revocation"]
+__all__ = [
+    "RevocationStatus",
+    "crls_from_issuer",
+    "check_revocation",
+    "is_delta_crl",
+    "crl_number",
+    "delta_base_number",
+]
+
+
+def is_delta_crl(crl: x509.CertificateRevocationList) -> bool:
+    """True if ``crl`` is a delta CRL rather than a complete one."""
+    return delta_base_number(crl) is not None
+
+
+def crl_number(crl: x509.CertificateRevocationList) -> int | None:
+    """The CRLNumber extension value, or None if the CRL carries none.
+
+    RFC 5280 requires a conforming CA to include it, but a CRL without one is
+    still parseable, so this reports its absence instead of raising.
+    """
+    try:
+        return crl.extensions.get_extension_for_class(x509.CRLNumber).value.crl_number
+    except x509.ExtensionNotFound:
+        return None
+
+
+def delta_base_number(crl: x509.CertificateRevocationList) -> int | None:
+    """The base CRLNumber a delta CRL is relative to, or None if not a delta."""
+    try:
+        extension = crl.extensions.get_extension_for_class(x509.DeltaCRLIndicator)
+    except x509.ExtensionNotFound:
+        return None
+    return extension.value.crl_number
 
 
 @dataclasses.dataclass(frozen=True)
@@ -47,8 +91,11 @@ class RevocationStatus:
             themselves -- a bad signature, an expired CRL. Separate from
             ``revoked`` because "this CRL is untrustworthy" and "this
             certificate is revoked" are different statements.
-        checked: True if at least one CRL from the right issuer was usable. If
-            False, revocation status is *unknown* rather than good.
+        checked: True if at least one *complete* CRL from the right issuer was
+            usable. If False, revocation status is *unknown* rather than good.
+            A delta CRL never sets this on its own, however well formed: it
+            reports changes since a base, so it cannot testify that a serial
+            absent from it was never revoked.
     """
 
     revoked: bool = False
@@ -123,6 +170,7 @@ def check_revocation(
     checked = False
     revoked_entry: x509.RevokedCertificate | None = None
 
+    usable: list[x509.CertificateRevocationList] = []
     for crl in applicable:
         problem = _verify_crl_signature(crl, issuer)
         if problem is not None:
@@ -141,32 +189,75 @@ def check_revocation(
             )
             continue
 
+        usable.append(crl)
+
+    complete = [c for c in usable if not is_delta_crl(c)]
+    deltas = [c for c in usable if is_delta_crl(c)]
+
+    # A delta is only usable on top of the base it names. Collect the numbers
+    # of the complete CRLs we actually verified, so an orphan delta -- one
+    # whose base we were not given -- is reported rather than applied.
+    available_bases = {
+        number for number in (crl_number(c) for c in complete) if number is not None
+    }
+    applicable_deltas: list[x509.CertificateRevocationList] = []
+    for delta in deltas:
+        base = delta_base_number(delta)
+        if base in available_bases:
+            applicable_deltas.append(delta)
+        else:
+            problems.append(
+                f"delta CRL from {delta.issuer.rfc4514_string()} is relative to "
+                f"base CRLNumber {base}, which was not supplied; a delta CRL "
+                f"cannot be applied without its base, and must not be read as "
+                f"a complete CRL"
+            )
+
+    if complete:
+        # Only a complete CRL can establish that a certificate is *not*
+        # revoked. Deltas refine that answer; they never stand in for it.
         checked = True
+
+    # Complete CRLs first, then deltas, because a delta's entry for a serial
+    # supersedes the base's: that is what makes it an update. The one case
+    # where the delta's entry is not a revocation is reason `removeFromCRL`,
+    # which withdraws an earlier revocation -- used when a certificate was put
+    # on hold and then released. Taking the last entry found and then checking
+    # for that reason handles both directions.
+    for crl in complete + applicable_deltas:
         entry = crl.get_revoked_certificate_by_serial_number(
             certificate.serial_number
         )
         if entry is not None:
             revoked_entry = entry
-            break
+
+    if revoked_entry is not None and _entry_reason(revoked_entry) is (
+        x509.ReasonFlags.remove_from_crl
+    ):
+        return RevocationStatus(
+            revoked=False, problems=tuple(problems), checked=checked
+        )
 
     if revoked_entry is None:
         return RevocationStatus(
             revoked=False, problems=tuple(problems), checked=checked
         )
 
-    reason: x509.ReasonFlags | None = None
-    try:
-        reason = revoked_entry.extensions.get_extension_for_class(
-            x509.CRLReason
-        ).value.reason
-    except x509.ExtensionNotFound:
-        # The reason code is optional; absence means unspecified, not invalid.
-        reason = None
-
     return RevocationStatus(
         revoked=True,
-        reason=reason,
+        reason=_entry_reason(revoked_entry),
         revoked_at=revoked_entry.revocation_date_utc,
         problems=tuple(problems),
         checked=True,
     )
+
+
+def _entry_reason(entry: x509.RevokedCertificate) -> x509.ReasonFlags | None:
+    """The CRLReason on a revocation entry, or None if it carried none.
+
+    The reason code is optional: its absence means unspecified, not invalid.
+    """
+    try:
+        return entry.extensions.get_extension_for_class(x509.CRLReason).value.reason
+    except x509.ExtensionNotFound:
+        return None
