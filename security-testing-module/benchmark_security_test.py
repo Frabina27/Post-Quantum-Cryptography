@@ -34,6 +34,7 @@ targets += [(f"PKI-{alg}", partial(PKIAdapter, alg), pki_attacks) for alg in lis
 failures = []
 results = []
 
+#Save benchmark results into a security_attack_testing_benchmark.csv file
 def save_benchmark_results(): 
     base_dir = os.path.dirname(os.path.abspath(__file__))
     results_dir = os.path.join(base_dir, "results")
