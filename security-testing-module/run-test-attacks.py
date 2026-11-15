@@ -19,7 +19,7 @@ import hybrid_kem
 
 
 #Declare array that holds algorithm being tested and what attacks it will face and array for failures. 
-targets = [("RSA", RSAAdapter, signature_attacks + encryption_attacks)]
+targets = [(f"RSA-{size}", partial(RSAAdapter, size), signature_attacks + encryption_attacks) for size in [2048, 3072]]
 targets += [(algorithm, partial(MLDSAAdapter, algorithm), signature_attacks) for algorithm in SUPPORTED_ALGORITHMS]
 targets += [(f"ECC-{curve}", partial(ECCAdapter, curve), signature_attacks)for curve in ECCImplemented.SUPPORTED_CURVES]
 targets += [(f"Kyber-{param_set}", partial(KyberAdapter, param_set), encryption_attacks) for param_set in PARAMS]
@@ -29,23 +29,27 @@ targets += [(f"PKI-{alg}", partial(PKIAdapter, alg), pki_attacks) for alg in lis
 
 failures = []
    
-#Loop through each algorithm (represented by adapter_class) and run attacks on them 
-print(f"FUNCTIONAL / SECURITY TESTS:")
-for label, adapter_class, attacks in targets:
-    print(f"=== {label} ===")
-    for attack in attacks:
-        try:
-            attack(adapter_class)
-            print(f"[PASS] {attack.__name__}")
-        except AssertionError:
-            print(f"[FAIL] {attack.__name__}")
-            failures.append((label,attack.__name__))
-    print("\n")
+def main(): 
+    #Loop through each algorithm (represented by adapter_class) and run attacks on them 
+    print(f"FUNCTIONAL / SECURITY TESTS:")
+    for label, adapter_class, attacks in targets:
+        print(f"=== {label} ===")
+        for attack in attacks:
+            try:
+                attack(adapter_class)
+                print(f"[PASS] {attack.__name__}")
+            except AssertionError:
+                print(f"[FAIL] {attack.__name__}")
+                failures.append((label,attack.__name__))
+        print("\n")
 
 
-if failures:
-    print(f"{len(failures)} failure(s)")
-    for algorithm, test in failures:
-        print(f"- {algorithm}: {test}")
-else: 
-    print(f"All algorithm functions have passed")
+    if failures:
+        print(f"{len(failures)} failure(s)")
+        for algorithm, test in failures:
+            print(f"- {algorithm}: {test}")
+    else: 
+        print(f"All algorithm functions have passed")
+
+if __name__ == "__main__":
+    main()

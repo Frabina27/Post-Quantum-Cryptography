@@ -2,7 +2,6 @@
 import sys 
 import oqs 
 import os 
-import struct 
 import datetime 
 from pathlib import Path
 from cryptography import x509
@@ -33,8 +32,9 @@ import hybrid_kem
 #RSAAdapter 
 class RSAAdapter: 
     name = "RSA"
-    def __init__(self): 
-        self.rsa = RSACrypto()
+    def __init__(self,key_size=2048):
+        self.name = f"RSA-{key_size}"
+        self.rsa = RSACrypto(key_size)
     def sign(self,message): 
         return self.rsa.sign(message)
     def verify(self,message,signature): 
