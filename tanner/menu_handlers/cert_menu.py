@@ -134,7 +134,7 @@ def issue_self_signed():
         return
 
     # no ca, the key signs its own cert
-    args = ["req", "-x509", "-new", "-config", CNF, "-extensions", "server_cert",
+    args = ["req", "-x509", "-new", "-config", CNF, "-extensions", "self_signed_cert",
             "-key", key, "-subj", f"/CN={cn}", "-days", "365",
             "-addext", f"subjectAltName={sans}", "-out", cert]
     if run_openssl(args, status = "Generating Self-Signed Certificate..."):

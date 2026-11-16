@@ -1,4 +1,4 @@
-# CA_DIR gets set by run_openssl in utils.py
+# CA_DIR and CRL_URL get set by run_openssl in utils.py
 
 [ ca ]
 default_ca = CA_default
@@ -11,12 +11,17 @@ rand_serial      = yes
 default_md       = default
 default_days     = 365
 default_crl_days = 30
+crlnumber        = $dir/crlnumber
+crl_extensions   = crl_ext
 policy           = policy_any
 copy_extensions  = copy
 unique_subject   = no
 
 [ policy_any ]
 commonName = supplied
+
+[ crl_ext ]
+authorityKeyIdentifier = keyid:always
 
 [ req ]
 distinguished_name = req_dn
@@ -34,13 +39,15 @@ basicConstraints       = critical, CA:true, pathlen:0
 keyUsage               = critical, keyCertSign, cRLSign
 subjectKeyIdentifier   = hash
 authorityKeyIdentifier = keyid:always
+crlDistributionPoints  = URI:$ENV::CRL_URL
 
 [ server_cert ]
 basicConstraints       = CA:false
-keyUsage               = critical, digitalSignature, keyEncipherment
+keyUsage               = critical, digitalSignature
 extendedKeyUsage       = serverAuth
 subjectKeyIdentifier   = hash
 authorityKeyIdentifier = keyid
+crlDistributionPoints  = URI:$ENV::CRL_URL
 
 [ client_cert ]
 basicConstraints       = CA:false
@@ -48,6 +55,7 @@ keyUsage               = critical, digitalSignature
 extendedKeyUsage       = clientAuth
 subjectKeyIdentifier   = hash
 authorityKeyIdentifier = keyid
+crlDistributionPoints  = URI:$ENV::CRL_URL
 
 [ code_sign ]
 basicConstraints       = CA:false
@@ -55,9 +63,18 @@ keyUsage               = critical, digitalSignature
 extendedKeyUsage       = codeSigning
 subjectKeyIdentifier   = hash
 authorityKeyIdentifier = keyid
+crlDistributionPoints  = URI:$ENV::CRL_URL
 
 [ usr_cert ]
 basicConstraints       = CA:false
-keyUsage               = critical, digitalSignature, keyEncipherment
+keyUsage               = critical, digitalSignature
 subjectKeyIdentifier   = hash
 authorityKeyIdentifier = keyid
+crlDistributionPoints  = URI:$ENV::CRL_URL
+
+[ self_signed_cert ]
+basicConstraints       = CA:false
+keyUsage               = critical, digitalSignature
+extendedKeyUsage       = serverAuth
+subjectKeyIdentifier   = hash
+authorityKeyIdentifier = keyid:always

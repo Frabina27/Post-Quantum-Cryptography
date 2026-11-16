@@ -39,8 +39,14 @@ def generate_crl():
     crl = ca_dir / "ca.crl"
     init_ca_dir(ca_dir)
     args = ["ca", "-config", CNF, "-gencrl", "-cert", ca_crt, "-keyfile", ca_key, "-passin", "env:PKEY_PASS", "-out", crl]
-    if run_openssl(args, password = pwd, ca_dir = ca_dir, status = "Generating CRL..."):
+    if not run_openssl(args, password = pwd, ca_dir = ca_dir, status = "Generating CRL..."):
+        pause()
+        return
+
+    # DER copy is what gets published at the certs' CRL distribution point
+    if run_openssl(["crl", "-in", crl, "-outform", "DER", "-out", ca_dir / "ca.crl.der"]):
         console.print(f"\n[bold green]CRL Generated: {crl}[/bold green]")
+        console.print(f"[green]Publish: {ca_dir / 'ca.crl.der'}[/green]")
     pause()
 
 def inspect_crl():
