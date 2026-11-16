@@ -1,3 +1,4 @@
+from rich.prompt import Confirm
 from utils import INTER, ROOT, ask_password, ask_path, console, get_choice, pause, render_menu, run_openssl
 
 INSPECT_MAIN_OPTIONS = [
@@ -37,8 +38,9 @@ def verify_chain():
     root_crt = ask_path("Trusted root CA", default = ROOT / "ca.crt")
 
     args = ["verify", "-CAfile", root_crt]
-    if (INTER / "ca.crt").exists():
-        inter_crt = ask_path("Intermediate CA", default = INTER / "ca.crt")
+    has_inter = (INTER / "ca.crt").exists()
+    if Confirm.ask("Include an intermediate CA?", default = has_inter):
+        inter_crt = ask_path("Intermediate CA", default = INTER / "ca.crt" if has_inter else None)
         args += ["-untrusted", inter_crt]
 
     if run_openssl(args + [cert]):

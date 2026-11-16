@@ -5,6 +5,7 @@ SIGN_MAIN_OPTIONS = [
     ("1", "Sign a File (Detached Digital Signature)"),
     ("2", "Verify File Signature (Public Key)"),
     ("3", "Verify Signature and Signer CA Trust Chain"),
+    ("4", "Export Public Key (.pub)"),
 ]
 
 DIGEST_OPTIONS = [
@@ -98,7 +99,8 @@ def verify_with_chain():
     sig = ask_path("Path to signature", default = file.with_name(file.name + ".sig"))
     cert = ask_path("Path to signer certificate")
 
-    args = ["verify", "-crl_check", "-CAfile", ROOT / "ca.crt"]
+    crl_flag = "-crl_check_all" if (ROOT / "ca.crl").exists() else "-crl_check"
+    args = ["verify", crl_flag, "-CAfile", ROOT / "ca.crt"]
     if (INTER / "ca.crt").exists():
         args += ["-untrusted", INTER / "ca.crt"]
     for crl in [ROOT / "ca.crl", INTER / "ca.crl"]:
@@ -107,6 +109,12 @@ def verify_with_chain():
 
     if not run_openssl(args + [cert], status = "Checking Trust Chain and CRL..."):
         console.print("[bold red]Signer certificate is NOT trusted (untrusted, revoked, or its CA has no CRL yet)[/bold red]")
+        pause()
+        return
+
+    ext = openssl_output(["x509", "-in", cert, "-noout", "-ext", "basicConstraints,keyUsage"]) or ""
+    if "CA:TRUE" in ext or "Digital Signature" not in ext:
+        console.print("[bold red]Certificate is not authorized for digital signatures (missing Digital Signature key usage)[/bold red]")
         pause()
         return
 
@@ -125,6 +133,26 @@ def verify_with_chain():
         console.print("[bold red]Signature is NOT valid[/bold red]")
     pause()
 
+def export_public_key():
+    src = ask_path("Path to certificate or private key")
+    pub = src.with_suffix(".pub")
+    if not ok_to_overwrite(pub):
+        pause()
+        return
+
+    pem = src.read_text(errors = "ignore")
+    pwd = ""
+    if "CERTIFICATE" in pem:
+        args = ["x509", "-in", src, "-pubkey", "-noout", "-out", pub]
+    else:
+        if "ENCRYPTED" in pem:
+            pwd = ask_password("Key password")
+        args = ["pkey", "-in", src, "-passin", "env:PKEY_PASS", "-pubout", "-out", pub]
+
+    if run_openssl(args, password = pwd, status = "Exporting Public Key..."):
+        console.print(f"\n[bold green]Public Key Exported: {pub}[/bold green]")
+    pause()
+
 def render():
     console.clear()
     while True:
@@ -139,3 +167,5 @@ def render():
                 verify_with_key()
             case "3":
                 verify_with_chain()
+            case "4":
+                export_public_key()

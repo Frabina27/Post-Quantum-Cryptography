@@ -79,7 +79,10 @@ def verify_against_crl():
 
     # intermediate needs the root to complete the chain
     if ca_dir == INTER:
-        args = ["verify", "-crl_check", "-CAfile", ROOT / "ca.crt", "-untrusted", ca_crt]
+        if (ROOT / "ca.crl").exists():
+            args = ["verify", "-crl_check_all", "-CAfile", ROOT / "ca.crt", "-untrusted", ca_crt, "-CRLfile", ROOT / "ca.crl"]
+        else:
+            args = ["verify", "-crl_check", "-CAfile", ROOT / "ca.crt", "-untrusted", ca_crt]
     else:
         args = ["verify", "-crl_check", "-CAfile", ca_crt]
 

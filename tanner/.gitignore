@@ -4,6 +4,7 @@ __pycache__
 
 # ignore keys and certs
 *.key
+*.pub
 *.crt
 *.csr
 *.pem
