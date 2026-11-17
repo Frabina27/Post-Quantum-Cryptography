@@ -8,9 +8,9 @@ sys.path.append(str(base / "Kyber"))
 
 
 from functools import partial
-from adapters import RSAAdapter, MLDSAAdapter, ECCAdapter, KyberAdapter, HybridSigAdapter, HybridKEMAdapter,PKIAdapter
+from adapters import RSAAdapter, MLDSAAdapter, ECCAdapter, KyberAdapter, HybridSigAdapter, HybridKEMAdapter,PKIAdapter, ClassicalPKIAdapter
 from attacks import signature_attacks, encryption_attacks, hybrid_sig_attacks, hybrid_kem_attacks,pki_attacks
-from mldsa_project import SUPPORTED_ALGORITHMS
+from mldsa_project import ALGORITHMS
 from ecc_implemented import ECCImplemented
 from kpke import PARAMS 
 from pqpki.algorithms import list_algorithms
@@ -20,12 +20,13 @@ import hybrid_kem
 
 #Declare array that holds algorithm being tested and what attacks it will face and array for failures. 
 targets = [(f"RSA-{size}", partial(RSAAdapter, size), signature_attacks + encryption_attacks) for size in [2048, 3072]]
-targets += [(algorithm, partial(MLDSAAdapter, algorithm), signature_attacks) for algorithm in SUPPORTED_ALGORITHMS]
+targets += [(algorithm, partial(MLDSAAdapter, algorithm), signature_attacks) for algorithm in ALGORITHMS]
 targets += [(f"ECC-{curve}", partial(ECCAdapter, curve), signature_attacks)for curve in ECCImplemented.SUPPORTED_CURVES]
 targets += [(f"Kyber-{param_set}", partial(KyberAdapter, param_set), encryption_attacks) for param_set in PARAMS]
 targets += [(f"Hybrid-Sig-{profile}", partial(HybridSigAdapter, profile), hybrid_sig_attacks) for profile in (hybrid_sig.PROFILE_ECDSA_MLDSA65, hybrid_sig.PROFILE_RSA_MLDSA65)]
 targets += [(f"Hybrid-KEM-{profile}", partial(HybridKEMAdapter, profile), hybrid_kem_attacks) for profile in (hybrid_kem.PROFILE_X25519_MLKEM768, hybrid_kem.PROFILE_P256_MLKEM768)]
 targets += [(f"PKI-{alg}", partial(PKIAdapter, alg), pki_attacks) for alg in list_algorithms()]
+targets += [(f"Classical-PKI-{alg}", partial(ClassicalPKIAdapter, alg), pki_attacks) for alg in ("RSA-2048", "RSA-3072", "ECDSA-P-256", "ECDSA-P-384", "Ed25519")]
 
 failures = []
    
