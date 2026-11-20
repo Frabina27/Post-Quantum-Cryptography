@@ -54,6 +54,7 @@ The results are displayed in the terminal and saved to `results/mldsa_benchmark.
 Benchmarking is optional and runs separately from the main demonstration. Results may vary depending on the computer being used.
 
 No login credentials are needed.
+
 Limitations
 - The module runs separately from the other parts of the group project.
 - Tampering and attack tests are handled in the separate security-testing-module, not in this demo script.
