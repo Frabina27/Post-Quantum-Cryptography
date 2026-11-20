@@ -9,18 +9,28 @@ The script supports ML-DSA-44, ML-DSA-65, and ML-DSA-87.
 - Git, CMake, and a C compiler may be needed if liboqs has to be built during installation
 ## Installation
 Clone the repository if you have not already:
-```git clone https://github.com/Frabina27/Post-Quantum-Cryptography.git```
-```cd Post-Quantum-Cryptography/mldsa-module```
+```bash
+git clone https://github.com/Frabina27/Post-Quantum-Cryptography.git
+```
+```bash
+cd Post-Quantum-Cryptography/mldsa-module
+```
 Install the Python dependency:
-```python -m pip install -r requirements.txt```
+```bash
+python -m pip install -r requirements.txt
+```
 liboqs-python also needs the underlying liboqs library. If it is not already installed, the Python wrapper may attempt to download and build it on first use.
 ## Running the Module
 From the mldsa-module folder, run:
-```python mldsa_project.py```
+```bash
+python mldsa_project.py
+```
 This runs the demo for all three supported ML-DSA algorithms.
 
 To run only one algorithm, use its name as an argument. For example:
-```python mldsa_project.py ML-DSA-65```
+```bash
+python mldsa_project.py ML-DSA-65
+```
 The program generates a key pair, signs a sample message, and checks whether the signature is valid. It prints the key and signature sizes along with the verification result. A successful run should show `Signature verified: yes.`
 
 On the first run, `liboqs-python` may automatically download and install the required `liboqs` library, which can produce a large amount of terminal output. This is a one-time setup process and may require CMake and C/C++ build tools. Subsequent runs should display only the ML-DSA test results and any minor library messages.
