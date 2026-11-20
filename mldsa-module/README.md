@@ -23,6 +23,8 @@ To run only one algorithm, use its name as an argument. For example:
 ```python mldsa_project.py ML-DSA-65```
 The program generates a key pair, signs a sample message, and checks whether the signature is valid. It prints the key and signature sizes along with the verification result. A successful run should show `Signature verified: yes.`
 
+On the first run, `liboqs-python` may automatically download and install the required `liboqs` library, which can produce a large amount of terminal output. This is a one-time setup process and may require CMake and C/C++ build tools. Subsequent runs should display only the ML-DSA test results and any minor library messages.
+
 No login credentials are needed.
 Limitations
 - The module runs separately from the other parts of the group project.
