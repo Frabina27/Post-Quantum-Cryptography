@@ -1,9 +1,10 @@
 """
-Hardening tests for the Hybrid KEM (v2 combiner).
+Hardening tests for the Hybrid KEM (v3, standard SHA3-256 combiner).
 
-Covers: transcript binding in the KDF, strict parsing of every encoding,
-envelope bounds checks, AAD binding, and rejection of malformed classical
-inputs. The functional and tampering tests live in test_hybrid.py.
+Covers: what the combiner binds, strict parsing of every encoding, envelope
+bounds checks, AAD binding, and rejection of malformed classical inputs.
+Known-answer tests against the specs live in test_hybrid_kem_kat.py; the
+functional and tampering tests live in test_hybrid.py.
 """
 
 from __future__ import annotations
@@ -76,43 +77,56 @@ def _flip_last(data: bytes) -> bytes:
     return data[:-1] + bytes([data[-1] ^ 0x01])
 
 
+_SS_M, _SS_T = b"\x11" * 32, b"\x22" * 32
+
+
+@pytest.mark.parametrize("profile", PROFILES)
+@pytest.mark.parametrize("field", ["classical_ct", "classical_pk"])
+def test_combiner_binds_classical_ciphertext_and_key(profile, field):
+    """Same secrets, but a changed ct_T or pk_T gives a different key (ECDH alone is not IND-CCA)."""
+    n = hybrid_kem._CLASSICAL_PUB_LEN[profile]
+    args = {"classical_ct": b"\x33" * n, "classical_pk": b"\x44" * n}
+    baseline = hybrid_kem.combine_secrets(profile, _SS_M, _SS_T, **args)
+    args[field] = _flip_last(args[field])
+    assert hybrid_kem.combine_secrets(profile, _SS_M, _SS_T, **args) != baseline
+
+
+def test_combiner_is_order_sensitive_in_secrets():
+    """Swapping the two secrets must not give the same key (ss_M comes first)."""
+    ct_pk = dict(classical_ct=b"\x33" * 32, classical_pk=b"\x44" * 32)
+    assert hybrid_kem.combine_secrets(
+        PROFILE_X25519_MLKEM768, _SS_M, _SS_T, **ct_pk
+    ) != hybrid_kem.combine_secrets(PROFILE_X25519_MLKEM768, _SS_T, _SS_M, **ct_pk)
+
+
+def test_combiner_labels_are_domain_separated():
+    """Profiles use distinct spec labels, so identical inputs never collide across profiles."""
+    labels = hybrid_kem.COMBINER_LABELS
+    assert labels[PROFILE_X25519_MLKEM768] == bytes.fromhex("5c2e2f2f5e5c")
+    assert labels[PROFILE_P256_MLKEM768] == b"MLKEM768-P256"
+
+
 @pytest.mark.parametrize(
-    "mutate",
+    "kwargs",
     [
-        pytest.param(lambda ct, pk: (replace(ct, pq_ciphertext_bytes=_flip_last(ct.pq_ciphertext_bytes)), pk), id="pq_ct"),
-        pytest.param(lambda ct, pk: (replace(ct, classical_ephemeral_pub_bytes=_flip_last(ct.classical_ephemeral_pub_bytes)), pk), id="classical_ct"),
-        pytest.param(lambda ct, pk: (ct, replace(pk, pq_bytes=_flip_last(pk.pq_bytes))), id="pq_pk"),
-        pytest.param(lambda ct, pk: (ct, replace(pk, classical_bytes=_flip_last(pk.classical_bytes))), id="classical_pk"),
+        dict(pq_ss=b"\x00" * 31, classical_ss=_SS_T, classical_ct=b"\x00" * 32, classical_pk=b"\x00" * 32),
+        dict(pq_ss=_SS_M, classical_ss=_SS_T, classical_ct=b"\x00" * 33, classical_pk=b"\x00" * 32),
+        dict(pq_ss=_SS_M, classical_ss=_SS_T, classical_ct=b"\x00" * 32, classical_pk=b"\x00" * 65),
     ],
 )
-def test_kdf_binds_every_transcript_field(mutate):
-    """Same shared secrets, but any changed ciphertext or key field gives a different key."""
-    pub, _ = generate_keypair(PROFILE_X25519_MLKEM768)
-    ct, _ = encapsulate(pub)
-    pq_ss, classical_ss = b"\x11" * 32, b"\x22" * 32
-
-    def derive(c, p):
-        return hybrid_kem._combine_secrets(
-            profile=PROFILE_X25519_MLKEM768,
-            pq_ss=pq_ss,
-            classical_ss=classical_ss,
-            ciphertext=c,
-            recipient_public_key=p,
-        )
-
-    baseline = derive(ct, pub)
-    assert derive(*mutate(ct, pub)) != baseline
+def test_combiner_rejects_wrong_input_lengths(kwargs):
+    """Fixed-length inputs are what make the plain concatenation unambiguous."""
+    with pytest.raises(ValueError):
+        hybrid_kem.combine_secrets(PROFILE_X25519_MLKEM768, **kwargs)
 
 
-def test_kdf_is_order_sensitive_in_secrets():
-    """Swapping the two secrets must not give the same key (ss_pq comes first)."""
-    pub, _ = generate_keypair(PROFILE_X25519_MLKEM768)
-    ct, _ = encapsulate(pub)
-    a, b = b"\x01" * 32, b"\x02" * 32
-    common = dict(profile=PROFILE_X25519_MLKEM768, ciphertext=ct, recipient_public_key=pub)
-    assert hybrid_kem._combine_secrets(pq_ss=a, classical_ss=b, **common) != hybrid_kem._combine_secrets(
-        pq_ss=b, classical_ss=a, **common
-    )
+@pytest.mark.parametrize("profile", PROFILES)
+def test_tampered_mlkem_ciphertext_changes_key(profile):
+    """ct_M is bound through ss_M: ML-KEM implicit rejection yields an unrelated key."""
+    pub, priv = generate_keypair(profile)
+    ct, key = encapsulate(pub)
+    bad = replace(ct, pq_ciphertext_bytes=_flip_last(ct.pq_ciphertext_bytes))
+    assert decapsulate(priv, bad) != key
 
 
 # ----------------------------------------------------------------------------
@@ -162,13 +176,14 @@ def test_trailing_bytes_rejected():
         HybridKEMPublicKey.from_bytes(pub.to_bytes() + b"\x00")
 
 
-def test_v1_ciphertext_magic_rejected():
-    """A v1 (old combiner) ciphertext must fail to parse instead of deriving a wrong key."""
+@pytest.mark.parametrize("old_magic", [b"HKCT1", b"HKCT2"])
+def test_old_ciphertext_magic_rejected(old_magic):
+    """A ciphertext from an older combiner must fail to parse instead of deriving a wrong key."""
     pub, _ = generate_keypair(PROFILE_X25519_MLKEM768)
     ct, _ = encapsulate(pub)
-    v1 = b"HKCT1" + ct.to_bytes()[len(hybrid_kem._MAGIC_CT):]
+    old = old_magic + ct.to_bytes()[len(hybrid_kem._MAGIC_CT):]
     with pytest.raises(ValueError, match="magic"):
-        HybridCiphertext.from_bytes(v1)
+        HybridCiphertext.from_bytes(old)
 
 
 def test_envelope_truncation_rejected():

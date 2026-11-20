@@ -2,46 +2,54 @@
 Hybrid Key Encapsulation Mechanism (KEM) Module.
 Combines Classical Key Agreement (X25519 or ECDH P-256) with Post-Quantum KEM (ML-KEM-768).
 
-Standard Alignment:
-- Construction follows the same shape as IETF draft-ietf-tls-ecdhe-mlkem
-  (X25519MLKEM768) and X-Wing: the ML-KEM shared secret comes first, then the
-  ECDH shared secret. The wire format is this project's own, so it is NOT
-  byte-compatible with TLS or X-Wing.
-- Conforms to NIST FIPS 203 for ML-KEM-768.
-- Uses an RFC 5869 / NIST SP 800-56C style HKDF-SHA256 combiner.
-- Uses AES-256-GCM for authenticated symmetric payload encryption.
+Standard Alignment (both profiles are byte-exact against the specs' test vectors):
+- PROFILE_X25519_MLKEM768 is X-Wing (draft-connolly-cfrg-xwing-kem-11), which
+  is the same as id-MLKEM768-X25519-SHA3-256 in the LAMPS Composite ML-KEM
+  draft (draft-ietf-lamps-pq-composite-kem-23).
+- PROFILE_P256_MLKEM768 is id-MLKEM768-ECDH-P256-SHA3-256 from the same LAMPS
+  Composite ML-KEM draft.
+- ML-KEM-768 conforms to NIST FIPS 203. The ECDH shared secret is the
+  x-coordinate Z of SP 800-56A Rev 3, and X25519 follows RFC 7748.
+- The combiner is a single SHA3-256 call, an SP 800-56C one-step KDF.
+- The application payload is encrypted with AES-256-GCM.
 
-Combiner (v2):
-    IKM  = ss_pq || ss_classical
-    info = "hybrid-kem-v2" || profile_id
-           || lp(ct_pq) || lp(ct_classical) || lp(pk_pq) || lp(pk_classical)
-    K    = HKDF-SHA256(salt=None, IKM, info, L=32)
-where lp(x) is a 4-byte big-endian length followed by x, and ct_classical is
-the sender's ephemeral ECDH public key.
+KEM Combiner (both profiles, LAMPS Composite ML-KEM Section 3.4):
+    ss = SHA3-256(ss_M || ss_T || ct_T || pk_T || Label)
+where ss_M is the ML-KEM shared secret, ss_T the ECDH shared secret, ct_T the
+sender's ephemeral ECDH public key, pk_T the recipient's static ECDH public
+key, and Label is
+    X25519: 5c2e2f2f5e5c  (the 6-byte X-Wing label "\\.//^\\")
+    P-256:  "MLKEM768-P256"
+All inputs are fixed-length per profile, so the concatenation is unambiguous.
 
-Why the transcript is bound: ECDH on its own is not an IND-CCA KEM. Feeding
-the ephemeral key and the recipient's static key into the KDF (as X-Wing
-does) is what lets the combined key stay secure when only the classical
-half holds. Binding the ML-KEM ciphertext and key too is the "kitchen sink"
-approach. It makes the combiner generic instead of relying on ML-KEM's
-ciphertext-binding property.
+Why ML-KEM comes first: both specs put ss_M first in SHA3-256. The TLS draft
+draft-ietf-tls-ecdhe-mlkem puts the ECDH secret first for SecP256r1MLKEM768.
+That draft only concatenates the secrets for the TLS key schedule and defines
+no standalone KEM combiner, so it is not the reference for this module.
+
+Why ct_T and pk_T are hashed but ct_M and pk_M are not: ECDH on its own is not
+an IND-CCA KEM, so the ephemeral and static ECDH keys must be bound into the
+KDF. ML-KEM is IND-CCA and ciphertext-binding (C2PRI), so its ciphertext and
+key are already bound through ss_M. This is the argument both specs rely on
+(see the X-Wing paper, and LAMPS Composite ML-KEM Section 9.2).
 
 Security Guarantee:
-The combined shared secret stays secure as long as AT LEAST ONE of the
-constituent primitives (classical or post-quantum) remains uncompromised.
+The combined shared secret is IND-CCA secure as long as AT LEAST ONE of
+ML-KEM-768 or the ECDH component (under the strong Diffie-Hellman assumption)
+remains unbroken.
 """
 
 from __future__ import annotations
 
+import hashlib
 import os
 import struct
 from dataclasses import dataclass
 from typing import Literal
 
-from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec, mlkem, x25519
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 
 ProfileType = Literal["x25519_mlkem768", "p256_mlkem768"]
@@ -50,10 +58,16 @@ PROFILE_X25519_MLKEM768: ProfileType = "x25519_mlkem768"
 PROFILE_P256_MLKEM768: ProfileType = "p256_mlkem768"
 
 _MAGIC_PUB = b"HKPUB1"
-# Bumped from HKCT1: v2 changed the combiner, so a v1 ciphertext would
-# silently derive a different key. A distinct magic makes that a clear error.
-_MAGIC_CT = b"HKCT2"
-_KDF_LABEL = b"hybrid-kem-v2"
+# Bumped on every combiner change (v1 HKDF, v2 HKDF+transcript, v3 standard
+# SHA3-256). An older ciphertext would silently derive a different key, so a
+# distinct magic turns that into a clear parse error.
+_MAGIC_CT = b"HKCT3"
+
+# KEM Combiner Labels from the specs (see module docstring).
+COMBINER_LABELS: dict[str, bytes] = {
+    PROFILE_X25519_MLKEM768: bytes.fromhex("5c2e2f2f5e5c"),  # X-Wing label
+    PROFILE_P256_MLKEM768: b"MLKEM768-P256",
+}
 
 _PROFILE_TO_BYTE: dict[str, int] = {
     PROFILE_X25519_MLKEM768: 1,
@@ -68,6 +82,15 @@ _CLASSICAL_PUB_LEN: dict[str, int] = {
 }
 _MLKEM768_PUB_LEN = 1184
 _MLKEM768_CT_LEN = 1088
+_MLKEM_SEED_LEN = 64   # d || z, FIPS 203
+_XWING_SEED_LEN = 32
+
+# RFC 5915 ECPrivateKey for P-256 with the namedCurve parameter and WITHOUT
+# the optional publicKey field, as LAMPS Composite ML-KEM Section 4 requires:
+#   SEQUENCE { INTEGER 1, OCTET STRING (32) d, [0] OID secp256r1 }
+_P256_ECPRIVKEY_PREFIX = bytes.fromhex("30310201010420")
+_P256_ECPRIVKEY_SUFFIX = bytes.fromhex("a00a06082a8648ce3d030107")
+_P256_ECPRIVKEY_LEN = len(_P256_ECPRIVKEY_PREFIX) + 32 + len(_P256_ECPRIVKEY_SUFFIX)
 
 _AESGCM_NONCE_LEN = 12
 _AESGCM_TAG_LEN = 16
@@ -95,11 +118,14 @@ def _lp(data: bytes) -> bytes:
     return struct.pack(">I", len(data)) + data
 
 
+def _check_profile(profile: str) -> ProfileType:
+    if profile not in _PROFILE_TO_BYTE:
+        raise ValueError(f"Unsupported profile: {profile!r}")
+    return profile  # type: ignore[return-value]
+
+
 def _profile_to_byte(profile: str) -> int:
-    try:
-        return _PROFILE_TO_BYTE[profile]
-    except KeyError:
-        raise ValueError(f"Unsupported profile: {profile!r}") from None
+    return _PROFILE_TO_BYTE[_check_profile(profile)]
 
 
 def _byte_to_profile(p_byte: int) -> ProfileType:
@@ -148,6 +174,31 @@ def _decode_pair(
     return profile, data[header_len:c_end], data[c_end:pq_end]
 
 
+def _split_composite(
+    profile: str, data: bytes, pq_len: int, type_name: str
+) -> tuple[bytes, bytes]:
+    """Split a spec-format value (ML-KEM part first, then the classical part)."""
+    profile = _check_profile(profile)
+    expected = pq_len + _CLASSICAL_PUB_LEN[profile]
+    if len(data) != expected:
+        raise ValueError(f"{type_name} for {profile} must be {expected} bytes, got {len(data)}")
+    return data[:pq_len], data[pq_len:]
+
+
+def _x25519_raw(key: x25519.X25519PrivateKey | x25519.X25519PublicKey) -> bytes:
+    if isinstance(key, x25519.X25519PrivateKey):
+        key = key.public_key()
+    return key.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+
+
+def _p256_point(key: ec.EllipticCurvePrivateKey | ec.EllipticCurvePublicKey) -> bytes:
+    if isinstance(key, ec.EllipticCurvePrivateKey):
+        key = key.public_key()
+    return key.public_bytes(
+        serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint
+    )
+
+
 # ----------------------------------------------------------------------------
 # Key and ciphertext containers
 # ----------------------------------------------------------------------------
@@ -164,17 +215,27 @@ class HybridKEMPublicKey:
 
     def to_bytes(self) -> bytes:
         """
-        Serialize into standard binary format:
+        Serialize into this project's framed format, which carries the profile:
         [Magic 6B] [Profile 1B] [len_classical 2B] [len_pq 2B] [classical_bytes] [pq_bytes]
         """
         return _encode_pair(_MAGIC_PUB, self.profile, self.classical_bytes, self.pq_bytes)
 
     @classmethod
     def from_bytes(cls, data: bytes) -> HybridKEMPublicKey:
-        """Deserialize from binary format. Rejects unknown profiles and wrong sizes."""
+        """Deserialize from the framed format. Rejects unknown profiles and wrong sizes."""
         profile, classical, pq = _decode_pair(
             _MAGIC_PUB, data, "HybridKEMPublicKey", _MLKEM768_PUB_LEN
         )
+        return cls(profile=profile, classical_bytes=classical, pq_bytes=pq)
+
+    def to_composite_bytes(self) -> bytes:
+        """Spec encoding pk_M || pk_T (1216 B for X-Wing, 1249 B for P-256)."""
+        return self.pq_bytes + self.classical_bytes
+
+    @classmethod
+    def from_composite_bytes(cls, profile: ProfileType, data: bytes) -> HybridKEMPublicKey:
+        """Parse the spec encoding pk_M || pk_T for the given profile."""
+        pq, classical = _split_composite(profile, data, _MLKEM768_PUB_LEN, "Public key")
         return cls(profile=profile, classical_bytes=classical, pq_bytes=pq)
 
     @property
@@ -207,19 +268,14 @@ class HybridKEMPrivateKey:
         self.profile = profile
         self.classical_key = classical_key
         self.pq_key = pq_key
-        # Cached: decapsulation needs the recipient's public key for the KDF transcript.
+        # Cached: decapsulation needs pk_T for the combiner.
         self._public_key = self._derive_public_key()
 
     def _derive_public_key(self) -> HybridKEMPublicKey:
         if isinstance(self.classical_key, x25519.X25519PrivateKey):
-            c_pub_bytes = self.classical_key.public_key().public_bytes(
-                serialization.Encoding.Raw, serialization.PublicFormat.Raw
-            )
+            c_pub_bytes = _x25519_raw(self.classical_key)
         else:
-            c_pub_bytes = self.classical_key.public_key().public_bytes(
-                serialization.Encoding.X962,
-                serialization.PublicFormat.UncompressedPoint,
-            )
+            c_pub_bytes = _p256_point(self.classical_key)
         return HybridKEMPublicKey(
             profile=self.profile,
             classical_bytes=c_pub_bytes,
@@ -229,6 +285,71 @@ class HybridKEMPrivateKey:
     def public_key(self) -> HybridKEMPublicKey:
         """Return the corresponding HybridKEMPublicKey."""
         return self._public_key
+
+    # -- Spec key formats ---------------------------------------------------
+
+    @classmethod
+    def from_xwing_seed(cls, seed: bytes) -> HybridKEMPrivateKey:
+        """
+        X-Wing key derivation (draft-connolly-cfrg-xwing-kem Section 5.2):
+        SHAKE256(seed, 96 B) -> ML-KEM (d || z) and the X25519 scalar.
+        """
+        if len(seed) != _XWING_SEED_LEN:
+            raise ValueError(f"X-Wing seed must be {_XWING_SEED_LEN} bytes, got {len(seed)}")
+        expanded = hashlib.shake_256(seed).digest(96)
+        return cls(
+            profile=PROFILE_X25519_MLKEM768,
+            classical_key=x25519.X25519PrivateKey.from_private_bytes(expanded[64:96]),
+            pq_key=mlkem.MLKEM768PrivateKey.from_seed_bytes(expanded[:64]),
+        )
+
+    def to_composite_bytes(self) -> bytes:
+        """
+        LAMPS Composite ML-KEM private key, mlkemSeed (64 B) || tradSK:
+        a raw 32-byte scalar for X25519, or an RFC 5915 ECPrivateKey without
+        publicKey (51 B) for P-256.
+        """
+        mlkem_seed = self.pq_key.private_bytes_raw()
+        if isinstance(self.classical_key, x25519.X25519PrivateKey):
+            trad = self.classical_key.private_bytes(
+                serialization.Encoding.Raw,
+                serialization.PrivateFormat.Raw,
+                serialization.NoEncryption(),
+            )
+        else:
+            scalar = self.classical_key.private_numbers().private_value.to_bytes(32, "big")
+            trad = _P256_ECPRIVKEY_PREFIX + scalar + _P256_ECPRIVKEY_SUFFIX
+        return mlkem_seed + trad
+
+    @classmethod
+    def from_composite_bytes(cls, profile: ProfileType, data: bytes) -> HybridKEMPrivateKey:
+        """Parse a LAMPS Composite ML-KEM private key (see to_composite_bytes)."""
+        profile = _check_profile(profile)
+        mlkem_seed, trad = data[:_MLKEM_SEED_LEN], data[_MLKEM_SEED_LEN:]
+        if len(mlkem_seed) != _MLKEM_SEED_LEN:
+            raise ValueError("Truncated composite private key")
+
+        classical_key: x25519.X25519PrivateKey | ec.EllipticCurvePrivateKey
+        if profile == PROFILE_X25519_MLKEM768:
+            if len(trad) != 32:
+                raise ValueError(f"X25519 private key must be 32 bytes, got {len(trad)}")
+            classical_key = x25519.X25519PrivateKey.from_private_bytes(trad)
+        else:
+            if (
+                len(trad) != _P256_ECPRIVKEY_LEN
+                or not trad.startswith(_P256_ECPRIVKEY_PREFIX)
+                or not trad.endswith(_P256_ECPRIVKEY_SUFFIX)
+            ):
+                raise ValueError("P-256 private key must be a 51-byte RFC 5915 ECPrivateKey "
+                                 "with namedCurve secp256r1 and no publicKey field")
+            scalar = int.from_bytes(trad[len(_P256_ECPRIVKEY_PREFIX):-len(_P256_ECPRIVKEY_SUFFIX)], "big")
+            classical_key = ec.derive_private_key(scalar, ec.SECP256R1())  # rejects 0 and >= n
+
+        return cls(
+            profile=profile,
+            classical_key=classical_key,
+            pq_key=mlkem.MLKEM768PrivateKey.from_seed_bytes(mlkem_seed),
+        )
 
     def to_pkcs8_der(self) -> tuple[bytes, bytes]:
         """Export (classical_der, pq_der) private keys in standard PKCS#8 DER."""
@@ -249,14 +370,15 @@ class HybridKEMPrivateKey:
 class HybridCiphertext:
     """
     Composite Ciphertext containing:
-    - Classical ephemeral public key (for ECDH agreement)
-    - ML-KEM ciphertext (encapsulated lattice secret)
+    - Classical ephemeral public key (ct_T, for ECDH agreement)
+    - ML-KEM ciphertext (ct_M, encapsulated lattice secret)
     """
     profile: ProfileType
     classical_ephemeral_pub_bytes: bytes
     pq_ciphertext_bytes: bytes
 
     def to_bytes(self) -> bytes:
+        """Framed format (carries the profile), see HybridKEMPublicKey.to_bytes."""
         return _encode_pair(
             _MAGIC_CT, self.profile, self.classical_ephemeral_pub_bytes, self.pq_ciphertext_bytes
         )
@@ -266,6 +388,20 @@ class HybridCiphertext:
         profile, classical, pq = _decode_pair(
             _MAGIC_CT, data, "HybridCiphertext", _MLKEM768_CT_LEN
         )
+        return cls(
+            profile=profile,
+            classical_ephemeral_pub_bytes=classical,
+            pq_ciphertext_bytes=pq,
+        )
+
+    def to_composite_bytes(self) -> bytes:
+        """Spec encoding ct_M || ct_T (1120 B for X-Wing, 1153 B for P-256)."""
+        return self.pq_ciphertext_bytes + self.classical_ephemeral_pub_bytes
+
+    @classmethod
+    def from_composite_bytes(cls, profile: ProfileType, data: bytes) -> HybridCiphertext:
+        """Parse the spec encoding ct_M || ct_T for the given profile."""
+        pq, classical = _split_composite(profile, data, _MLKEM768_CT_LEN, "Ciphertext")
         return cls(
             profile=profile,
             classical_ephemeral_pub_bytes=classical,
@@ -326,45 +462,47 @@ class HybridEncryptedMessage:
 
 def generate_keypair(profile: ProfileType = PROFILE_X25519_MLKEM768) -> tuple[HybridKEMPublicKey, HybridKEMPrivateKey]:
     """
-    Generate a hybrid keypair containing classical and ML-KEM-768 keys.
+    Generate a hybrid keypair.
+
+    For X25519 this is X-Wing's GenerateKeyPair (a random 32-byte seed
+    expanded with SHAKE256). For P-256 the two components are generated
+    independently, as LAMPS Composite ML-KEM Section 3.1 specifies.
     """
     if profile == PROFILE_X25519_MLKEM768:
-        classical_key = x25519.X25519PrivateKey.generate()
+        priv = HybridKEMPrivateKey.from_xwing_seed(os.urandom(_XWING_SEED_LEN))
     elif profile == PROFILE_P256_MLKEM768:
-        classical_key = ec.generate_private_key(ec.SECP256R1())
+        priv = HybridKEMPrivateKey(
+            profile=profile,
+            classical_key=ec.generate_private_key(ec.SECP256R1()),
+            pq_key=mlkem.MLKEM768PrivateKey.generate(),
+        )
     else:
         raise ValueError(f"Unsupported profile: {profile}")
-
-    pq_key = mlkem.MLKEM768PrivateKey.generate()
-    priv = HybridKEMPrivateKey(profile=profile, classical_key=classical_key, pq_key=pq_key)
     return priv.public_key(), priv
 
 
-def _combine_secrets(
-    *,
+def combine_secrets(
     profile: ProfileType,
     pq_ss: bytes,
     classical_ss: bytes,
-    ciphertext: HybridCiphertext,
-    recipient_public_key: HybridKEMPublicKey,
+    classical_ct: bytes,
+    classical_pk: bytes,
 ) -> bytes:
     """
-    Cryptographic Combiner (HKDF-SHA256), see the module docstring.
+    KEM Combiner: SHA3-256(ss_M || ss_T || ct_T || pk_T || Label).
 
-    The secrets are the HKDF input keying material. The full transcript
-    (both ciphertexts and both recipient keys, length-prefixed) goes into
-    `info`, so changing any field gives an unrelated key.
+    Exposed so known-answer tests can check it against the specs'
+    intermediate values. Inputs must have the profile's fixed lengths.
     """
-    info = (
-        _KDF_LABEL
-        + bytes([_profile_to_byte(profile)])
-        + _lp(ciphertext.pq_ciphertext_bytes)
-        + _lp(ciphertext.classical_ephemeral_pub_bytes)
-        + _lp(recipient_public_key.pq_bytes)
-        + _lp(recipient_public_key.classical_bytes)
-    )
-    hkdf = HKDF(algorithm=hashes.SHA256(), length=32, salt=None, info=info)
-    return hkdf.derive(pq_ss + classical_ss)
+    profile = _check_profile(profile)
+    c_len = _CLASSICAL_PUB_LEN[profile]
+    if len(pq_ss) != 32 or len(classical_ss) != 32:
+        raise ValueError("Shared secrets must be 32 bytes")
+    if len(classical_ct) != c_len or len(classical_pk) != c_len:
+        raise ValueError(f"Classical ciphertext and public key must be {c_len} bytes for {profile}")
+    return hashlib.sha3_256(
+        pq_ss + classical_ss + classical_ct + classical_pk + COMBINER_LABELS[profile]
+    ).digest()
 
 
 def encapsulate(public_key: HybridKEMPublicKey) -> tuple[HybridCiphertext, bytes]:
@@ -374,13 +512,11 @@ def encapsulate(public_key: HybridKEMPublicKey) -> tuple[HybridCiphertext, bytes
     Returns:
         (HybridCiphertext, shared_secret_32bytes)
     """
-    # 1. Classical Ephemeral Key Exchange
+    # 1. Classical DHKEM: ephemeral key pair, ct_T = ephemeral public key
     if public_key.profile == PROFILE_X25519_MLKEM768:
         peer_c_pub = x25519.X25519PublicKey.from_public_bytes(public_key.classical_bytes)
         eph_priv = x25519.X25519PrivateKey.generate()
-        eph_pub_bytes = eph_priv.public_key().public_bytes(
-            serialization.Encoding.Raw, serialization.PublicFormat.Raw
-        )
+        eph_pub_bytes = _x25519_raw(eph_priv)
         # cryptography rejects low-order points (all-zero output) with ValueError.
         classical_ss = eph_priv.exchange(peer_c_pub)
     elif public_key.profile == PROFILE_P256_MLKEM768:
@@ -389,15 +525,13 @@ def encapsulate(public_key: HybridKEMPublicKey) -> tuple[HybridCiphertext, bytes
             ec.SECP256R1(), public_key.classical_bytes
         )
         eph_priv = ec.generate_private_key(ec.SECP256R1())
-        eph_pub_bytes = eph_priv.public_key().public_bytes(
-            serialization.Encoding.X962,
-            serialization.PublicFormat.UncompressedPoint,
-        )
+        eph_pub_bytes = _p256_point(eph_priv)
         classical_ss = eph_priv.exchange(ec.ECDH(), peer_c_pub)
     else:
         raise ValueError(f"Unknown profile: {public_key.profile}")
 
-    # 2. Post-Quantum Encapsulation (ML-KEM-768)
+    # 2. ML-KEM-768. from_public_bytes performs the FIPS 203 Section 7.2
+    #    encapsulation key check that X-Wing requires.
     pq_pub = mlkem.MLKEM768PublicKey.from_public_bytes(public_key.pq_bytes)
     pq_ss, pq_ct_bytes = pq_pub.encapsulate()
 
@@ -407,13 +541,9 @@ def encapsulate(public_key: HybridKEMPublicKey) -> tuple[HybridCiphertext, bytes
         pq_ciphertext_bytes=pq_ct_bytes,
     )
 
-    # 3. Combine secrets, bound to the full transcript
-    combined_secret = _combine_secrets(
-        profile=public_key.profile,
-        pq_ss=pq_ss,
-        classical_ss=classical_ss,
-        ciphertext=ciphertext,
-        recipient_public_key=public_key,
+    # 3. Standard combiner
+    combined_secret = combine_secrets(
+        public_key.profile, pq_ss, classical_ss, eph_pub_bytes, public_key.classical_bytes
     )
     return ciphertext, combined_secret
 
@@ -433,7 +563,7 @@ def decapsulate(private_key: HybridKEMPrivateKey, ciphertext: HybridCiphertext) 
             f"Profile mismatch: private key {private_key.profile} != ciphertext {ciphertext.profile}"
         )
 
-    # 1. Classical Ephemeral ECDH Decapsulation
+    # 1. Classical DHKEM decapsulation
     try:
         if private_key.profile == PROFILE_X25519_MLKEM768:
             assert isinstance(private_key.classical_key, x25519.X25519PrivateKey)
@@ -452,19 +582,19 @@ def decapsulate(private_key: HybridKEMPrivateKey, ciphertext: HybridCiphertext) 
     except Exception as exc:
         raise DecapsulationError(f"Classical ECDH exchange failed: {exc}") from exc
 
-    # 2. Post-Quantum ML-KEM Decapsulation
+    # 2. ML-KEM-768 decapsulation (implicit rejection on a bad ciphertext)
     try:
         pq_ss = private_key.pq_key.decapsulate(ciphertext.pq_ciphertext_bytes)
     except Exception as exc:
         raise DecapsulationError(f"ML-KEM decapsulation failed: {exc}") from exc
 
-    # 3. Re-combine secrets over the same transcript the sender used
-    return _combine_secrets(
-        profile=private_key.profile,
-        pq_ss=pq_ss,
-        classical_ss=classical_ss,
-        ciphertext=ciphertext,
-        recipient_public_key=private_key.public_key(),
+    # 3. Standard combiner, with pk_T taken from the recipient's own key
+    return combine_secrets(
+        private_key.profile,
+        pq_ss,
+        classical_ss,
+        ciphertext.classical_ephemeral_pub_bytes,
+        private_key.public_key().classical_bytes,
     )
 
 
