@@ -25,6 +25,24 @@ The program generates a key pair, signs a sample message, and checks whether the
 
 On the first run, `liboqs-python` may automatically download and install the required `liboqs` library, which can produce a large amount of terminal output. This is a one-time setup process and may require CMake and C/C++ build tools. Subsequent runs should display only the ML-DSA test results and any minor library messages.
 
+## Benchmarking
+The module also includes a separate benchmarking script to measure the performance of ML-DSA-44, ML-DSA-65, and ML-DSA-87.
+To run the benchmarks:
+```bash
+python benchmark_mldsa.py
+```
+By default, the script performs 1,000 iterations for key generation, signing, and verification. It calculates the mean, median, standard deviation, and operations per second for each algorithm.
+To run fewer iterations:
+```bash
+python benchmark_mldsa.py --iterations 100
+```
+To benchmark only one algorithm:
+```bash
+python benchmark_mldsa.py --algorithm ML-DSA-65
+```
+The results are displayed in the terminal and saved to `results/mldsa_benchmark.csv`.
+Benchmarking is optional and runs separately from the main demonstration. Results may vary depending on the computer being used.
+
 No login credentials are needed.
 Limitations
 - The module runs separately from the other parts of the group project.
