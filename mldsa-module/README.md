@@ -25,7 +25,5 @@ The program generates a key pair, signs a sample message, and checks whether the
 
 No login credentials are needed.
 Limitations
-- This is a basic demonstration using a predefined test message, not a full application.
 - The module runs separately from the other parts of the group project.
 - Tampering and attack tests are handled in the separate security-testing-module, not in this demo script.
-- It is intended for educational use only.
