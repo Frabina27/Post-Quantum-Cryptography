@@ -12,8 +12,7 @@ The repository includes modules for algorithms such as ML-DSA, Kyber, RSA, and E
 The root requirements.txt includes liboqs-python and cryptography>=50. Some modules may have additional setup requirements.
 ## Installation and Running
 Clone the repository:
-```git clone https://github.com/Frabina27/Post-Quantum-Cryptography.git```
-cd Post-Quantum-Cryptography
+```git clone https://github.com/Frabina27/Post-Quantum-Cryptography.git cd Post-Quantum-Cryptography```
 To install the shared Python dependencies:
 ```python -m pip install -r requirements.txt```
 Then open the folder for the module you want to run and follow its README.
