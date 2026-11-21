@@ -20,8 +20,9 @@ These results will help our team compare ECC with post‑quantum algorithms late
 
 | File | Purpose |
 |---|---|
-| `ecc_crypto.py` | Main ECC implementation: key generation, ECDH, ECDSA, and PEM export. |
+| `ecc_implemented.py` | Main ECC implementation: key generation, ECDH, ECDSA, and PEM export. |
 | `test_ecc.py` | Tests ECC functionality to ensure correctness. |
+| `benchmark_ecc.py` | Measures timings and sizes for all three curves and saves a CSV. |
 | `requirements.txt` | Lists required Python libraries. |
 | `ecc-readme.md` | Documentation explaining the module and how to run it. |
 
@@ -91,7 +92,8 @@ The test suite covers:
 - Curve selection  
 - PEM formatting  
 
-All tests passed in the reported run.
+The suite also checks operations on all three curves, loading and using exported
+keys, exported key size measurements, and rejection of signatures from another key.
 
 ---
 
@@ -101,12 +103,27 @@ Install dependencies:
 
 ```bash
 python -m pip install -r ecc-module/requirements.txt
-````
+```
 
 Run tests:
-````bash
+```bash
 python ecc-module/test_ecc.py
-````
+```
+
+Run benchmarks separately:
+
+```bash
+python ecc-module/benchmark_ecc.py
+```
+
+The benchmark averages 100 iterations for key generation, Alice's and Bob's
+shared-key derivation (ECDH plus HKDF), signing, and verification. It reports PEM
+key sizes, the derived key length, and one DER-encoded signature's size, and saves
+results to `ecc-module/results/ecc_benchmark.csv`. ECDSA signature lengths can vary
+between runs. Timings depend on the computer and runtime environment.
+
+The module does not encrypt messages or produce ciphertext; key agreement is
+reported instead of the RSA benchmark's encryption/decryption operations.
 
 ## Current Limitations
 - ECC does not support direct encryption; ECDH must be combined with a symmetric cipher.

@@ -1,6 +1,7 @@
 import unittest
 from ecc_implemented import ECCImplemented
 from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives import hashes, serialization
 
 
 class TestECC(unittest.TestCase):
@@ -58,7 +59,7 @@ class TestECC(unittest.TestCase):
         message = b"hello"
         signature = ecc.sign(message)
 
-        bad_signature = signature[:-1] + b"\x00"
+        bad_signature = signature[:-1] + bytes([signature[-1] ^ 1])
         self.assertFalse(ecc.verify(message, bad_signature))
         print("PASS: Verification rejected the modified signature.", flush=True)
 
@@ -71,6 +72,57 @@ class TestECC(unittest.TestCase):
         self.assertTrue(pub_pem.startswith(b"-----BEGIN PUBLIC KEY-----"))
         self.assertTrue(priv_pem.startswith(b"-----BEGIN PRIVATE KEY-----"))
         print("PASS: Both exported keys have the expected PEM headers.", flush=True)
+
+    def test_operations_on_all_curves(self):
+        print("\nTesting ECDH and ECDSA operations on every supported curve...", flush=True)
+        for curve in ECCImplemented.SUPPORTED_CURVES:
+            with self.subTest(curve=curve):
+                alice = ECCImplemented(curve)
+                bob = ECCImplemented(curve)
+                shared_key = alice.derive_shared_key(bob.public_key)
+                self.assertEqual(shared_key, bob.derive_shared_key(alice.public_key))
+                self.assertEqual(len(shared_key), 32)
+                message = b"ECC operations across curves"
+                signature = alice.sign(message)
+                self.assertTrue(alice.verify(message, signature))
+                self.assertFalse(alice.verify(b"modified", signature))
+                print(f"PASS: {curve} key agreement, 32-byte derived key, signing, "
+                      "verification, and modified-message rejection.", flush=True)
+
+    def test_pem_round_trip(self):
+        print("\nTesting exported key loading and use on every supported curve...", flush=True)
+        for curve in ECCImplemented.SUPPORTED_CURVES:
+            with self.subTest(curve=curve):
+                ecc = ECCImplemented(curve)
+                public_key = serialization.load_pem_public_key(ecc.get_public_key_pem())
+                private_key = serialization.load_pem_private_key(
+                    ecc.get_private_key_pem(), password=None
+                )
+                self.assertEqual(public_key.public_numbers(), ecc.public_key.public_numbers())
+                self.assertEqual(private_key.private_numbers(), ecc.private_key.private_numbers())
+                message = b"PEM round-trip test"
+                signature = private_key.sign(message, ec.ECDSA(hashes.SHA256()))
+                public_key.verify(signature, message, ec.ECDSA(hashes.SHA256()))
+                print(f"PASS: {curve} exported keys reload and sign/verify correctly.", flush=True)
+
+    def test_key_size_measurements(self):
+        print("\nTesting exported key size measurements on every supported curve...", flush=True)
+        for curve in ECCImplemented.SUPPORTED_CURVES:
+            with self.subTest(curve=curve):
+                ecc = ECCImplemented(curve)
+                self.assertEqual(ecc.get_public_key_size_bytes(), len(ecc.get_public_key_pem()))
+                self.assertEqual(ecc.get_private_key_size_bytes(), len(ecc.get_private_key_pem()))
+                print(f"PASS: {curve} size helpers match exported PEM lengths.", flush=True)
+
+    def test_wrong_key_signature_fails(self):
+        print("\nTesting rejection of signatures checked with a different key...", flush=True)
+        for curve in ECCImplemented.SUPPORTED_CURVES:
+            with self.subTest(curve=curve):
+                alice = ECCImplemented(curve)
+                bob = ECCImplemented(curve)
+                message = b"Signed by Alice"
+                self.assertFalse(bob.verify(message, alice.sign(message)))
+                print(f"PASS: {curve} rejected a signature from another key.", flush=True)
 
 
 if __name__ == "__main__":
