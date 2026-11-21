@@ -1,12 +1,9 @@
 # RSA Cryptographic Module
 
+## The benchmark measures RSA-2048 and RSA-3072 separately, averaging 10 key generations and 100 runs each for encryption, decryption, signing, and verification per key size.
+
 ## Project Overview
-
-For my part of the Post-Quantum Cryptography project, I worked on implementing RSA encryption, decryption, key generation, and digital signatures using Python.
-
-The main purpose of my module is to show how classical RSA cryptography works and provide results that our team can compare with post-quantum algorithms like ML-KEM and ML-DSA.
-
-I also added tests to check that everything works correctly and a benchmarking script to measure how RSA performs with different key sizes.
+For my part of the Post-Quantum Cryptography project, I worked on implementing RSA encryption, decryption, key generation, and digital signatures using Python. The main purpose of my module is to show how classical RSA cryptography works and provide results that our team can compare with post-quantum algorithms like ML-KEM and ML-DSA. I also added tests to check that everything works correctly and a benchmarking script to measure how RSA performs with different key sizes.
 
 ## Files and What They Do
 
@@ -25,7 +22,7 @@ I also added tests to check that everything works correctly and a benchmarking s
 
 I used the Python `cryptography` library to generate RSA public and private keys.
 
-My module supports two key sizes:
+My module supports
 - RSA-2048
 - RSA-3072
 
@@ -113,30 +110,8 @@ python rsa-module/test_rsa.py
 ```
 
 To run the benchmarks:
-
 ```bash
 python rsa-module/benchmark_rsa.py
 ```
 
 The benchmark results will be saved in the `rsa-module/results/` folder.
-
-## Current Limitations
-
-My module currently works with short messages and does not support encrypting entire files. It also exports private keys without password protection, so those exported keys should only be used for testing.
-
-The module does not include post-quantum algorithms itself because those are being developed by other team members.
-
-## Next Steps
-
-My next steps are to:
-
-- Integrate my RSA module with the rest of the team's code.
-- Help compare RSA performance with ML-KEM and ML-DSA.
-- Add more security tests if needed.
-- Make sure my module works properly during the final project demonstration.
-
-## Conclusion
-
-So far, I've implemented the main RSA functions, created tests, and collected performance measurements for RSA-2048 and RSA-3072.
-
-My module will serve as one of the classical cryptography baselines for our project. Once the other modules are ready, we'll be able to compare their performance and better understand the differences between classical and post-quantum cryptography.

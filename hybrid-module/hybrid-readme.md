@@ -22,6 +22,9 @@ hybrid-module/
 ├── hybrid_sig.py        # Composite Signatures (ECDSA/RSA + ML-DSA-65) with strict dual-verification
 ├── hybrid_pki.py        # PKI Transition Simulator (Dual-identity certs, CA issuance & policy validation)
 ├── test_hybrid.py       # Comprehensive unit tests & security tampering tests (15 test cases)
+├── test_hybrid_kem_hardening.py  # KEM hardening: combiner binding, strict parsing, bounds, AAD
+├── test_hybrid_kem_kat.py        # Known-answer tests vs the X-Wing and LAMPS Composite ML-KEM vectors
+├── kat/                          # Spec test vectors (hex JSON) used by test_hybrid_kem_kat.py
 ├── benchmark_hybrid.py  # Performance measurement harness comparing Classical vs PQ vs Hybrid
 ├── requirements.txt     # Python dependency specifications (cryptography>=50.0.0)
 ├── hybrid-readme.md     # Module documentation, security proofs, and integration guide
@@ -35,15 +38,23 @@ hybrid-module/
 
 ### 1. Hybrid Key Encapsulation Mechanism (`hybrid_kem.py`)
 - **Supported Profiles:**
-  - `PROFILE_X25519_MLKEM768`: Modeled after IETF `draft-ietf-tls-hybrid-design` (used in modern TLS 1.3 / Chrome / Cloudflare).
-  - `PROFILE_P256_MLKEM768`: Modeled after NIST SP 800-56C Rev 2 (ECDH NIST P-256 + ML-KEM-768).
-- **Cryptographic Combiner:**
-  - Ephemeral public keys and encapsulated ciphertexts are transmitted together.
-  - The sender derives $SS_{\text{classical}} = \text{ECDH}(sk_{\text{eph}}, pk_{\text{peer}})$ and encapsulates $SS_{\text{pq}}, c_{\text{kem}} = \text{ML-KEM.Encaps}(pk_{\text{kem}})$.
-  - A secure Key Derivation Function (HKDF-SHA256) extracts and expands the concatenated secrets:
-    $$K_{\text{session}} = \text{HKDF-Extract-and-Expand}(SS_{\text{classical}} \parallel SS_{\text{pq}}, \text{info}=\text{"hybrid-kem-v1"})$$
+  - `PROFILE_X25519_MLKEM768`: **X-Wing** (`draft-connolly-cfrg-xwing-kem-11`), which is the same as `id-MLKEM768-X25519-SHA3-256` in the LAMPS Composite ML-KEM draft. Key generation follows X-Wing too: a 32-byte seed expanded with SHAKE256.
+  - `PROFILE_P256_MLKEM768`: **`id-MLKEM768-ECDH-P256-SHA3-256`** from the LAMPS Composite ML-KEM draft (`draft-ietf-lamps-pq-composite-kem-23`).
+  - Both are checked byte-for-byte against the specs' published test vectors (`test_hybrid_kem_kat.py`).
+- **Cryptographic Combiner (v3, standard):**
+  - The sender runs ECDH as a KEM: it makes an ephemeral key pair, sends the public half as $ct_T$, and gets $SS_T = \text{ECDH}(sk_{\text{eph}}, pk_T)$. It also encapsulates $SS_M, ct_M = \text{ML-KEM.Encaps}(pk_M)$.
+  - Both profiles use the LAMPS combiner (Section 3.4), a single SHA3-256 call (an SP 800-56C one-step KDF):
+    $$K = \text{SHA3-256}\big(SS_M \parallel SS_T \parallel ct_T \parallel pk_T \parallel \text{Label}\big)$$
+    with Label `5c2e2f2f5e5c` (the X-Wing label `\.//^\`) for X25519 and `"MLKEM768-P256"` for P-256. All inputs have fixed lengths per profile, so the concatenation is unambiguous.
+  - **Why $ct_T$ and $pk_T$ are hashed:** ECDH on its own is not an IND-CCA KEM. Binding the ephemeral and static ECDH keys is what keeps the combined key secure when only the classical half holds.
+  - **Why $ct_M$ and $pk_M$ are not hashed:** ML-KEM is IND-CCA and ciphertext-binding, so its ciphertext and key are already bound through $SS_M$. Both specs rely on this. Hashing the 2.3 KB of ML-KEM data again would add cost without adding security.
+  - **Secret order:** both specs put $SS_M$ first. `draft-ietf-tls-ecdhe-mlkem` puts the ECDH secret first for `SecP256r1MLKEM768`, but it only concatenates the secrets for the TLS key schedule, not as a standalone combiner, so it isn't the reference here.
+  - **Standard encodings:** `to_composite_bytes()` / `from_composite_bytes()` give the specs' formats. Public keys are $pk_M \parallel pk_T$ (1216 / 1249 B) and ciphertexts are $ct_M \parallel ct_T$ (1120 / 1153 B). Private keys are the LAMPS `mlkemSeed || tradSK` (X25519: raw 32 B; P-256: RFC 5915 ECPrivateKey without `publicKey`). `HybridKEMPrivateKey.from_xwing_seed()` loads a 32-byte X-Wing key.
+  - The framed `to_bytes()` format, which carries a profile ID, is still used inside the encrypted envelope. Ciphertexts use the magic `HKCT3`, so v1 or v2 ciphertexts fail to parse instead of silently deriving a different key.
+- **Strict parsing:** unknown profile identifiers, wrong component sizes (32/65 B classical, 1184 B ML-KEM key, 1088 B ML-KEM ciphertext), trailing bytes, truncated envelopes and non-12-byte nonces are all rejected. Invalid classical points (X25519 low-order, P-256 off-curve) cause `DecapsulationError`.
 - **Authenticated Data Encryption (AEAD):**
   - Uses $K_{\text{session}}$ with **AES-256-GCM** with a cryptographically secure 96-bit random nonce to encrypt and integrity-protect application payloads.
+  - The serialized KEM ciphertext is authenticated as part of the GCM associated data, together with the caller's `associated_data`.
 
 ### 2. Composite Digital Signatures (`hybrid_sig.py`)
 - **Supported Profiles:**
@@ -78,26 +89,26 @@ hybrid-module/
 
 ## Performance Benchmark Results
 
-Measured on Windows x86_64 across 200 iterations per operation:
+Measured on Linux x86_64 (Python 3.14, cryptography 50.0.2) across 200 iterations per operation, with the v3 (standard SHA3-256) KEM combiner. Hybrid KEM sizes are for the framed format (11-byte header); the standard X-Wing encodings are 1,216 B and 1,120 B. Timings vary by about ±10% between runs.
 
 | Cryptographic Scheme | Security Level / Type | Public Key | Private Key | Ciphertext / Sig | KeyGen | Primary Op (Encap / Sign) | Secondary Op (Decap / Verify) |
 |---|---|---:|---:|---:|---:|---:|---:|
-| **Classical X25519** | Classical (128-bit) | 32 B | 48 B | 32 B | 0.039 ms | 0.070 ms | 0.031 ms |
-| **PQ ML-KEM-768** | Post-Quantum (Cat 3) | 1,184 B | 86 B | 1,088 B | 0.185 ms | 0.052 ms | 0.075 ms |
-| **Hybrid X25519 + ML-KEM** | Hybrid (Dual-Protected) | 1,227 B | 134 B | 1,130 B | 0.255 ms | 0.160 ms | 0.117 ms |
-| **Classical ECDSA P-256** | Classical (128-bit) | 91 B | 138 B | 71 B | 0.022 ms | 0.031 ms | 0.068 ms |
-| **PQ ML-DSA-65** | Post-Quantum (Cat 3) | 1,952 B | 54 B | 3,309 B | 0.233 ms | 1.322 ms | 0.249 ms |
-| **Hybrid ECDSA + ML-DSA** | Hybrid (Dual-Protected) | 2,054 B | 192 B | 3,390 B | 0.287 ms | 1.306 ms | 0.368 ms |
+| **Classical X25519** | Classical (128-bit) | 32 B | 48 B | 32 B | 0.030 ms | 0.060 ms | 0.029 ms |
+| **PQ ML-KEM-768** | Post-Quantum (Cat 3) | 1,184 B | 86 B | 1,088 B | 0.101 ms | 0.023 ms | 0.037 ms |
+| **Hybrid X25519 + ML-KEM** | Hybrid (Dual-Protected) | 1,227 B | 134 B | 1,130 B | 0.170 ms | 0.120 ms | 0.076 ms |
+| **Classical ECDSA P-256** | Classical (128-bit) | 91 B | 138 B | 72 B | 0.015 ms | 0.026 ms | 0.064 ms |
+| **PQ ML-DSA-65** | Post-Quantum (Cat 3) | 1,952 B | 54 B | 3,309 B | 0.195 ms | 1.019 ms | 0.193 ms |
+| **Hybrid ECDSA + ML-DSA** | Hybrid (Dual-Protected) | 2,054 B | 192 B | 3,391 B | 0.240 ms | 1.111 ms | 0.290 ms |
 
 ### Key Observations & Trade-off Analysis:
 1. **Computational Latency:**
-   - Post-quantum ML-KEM-768 encapsulation is exceptionally fast (0.052 ms), slightly outperforming classical ECDH generation (0.070 ms).
-   - The Hybrid KEM overhead is only ~0.16 ms per transaction, which includes ephemeral classical ECDH derivation, ML-KEM encapsulation, HKDF extraction, and secret combination.
-   - For signatures, ML-DSA-65 signing requires 1.32 ms, which dominates the hybrid signing time; ECDSA adds negligible computational overhead (~0.03 ms).
+   - Post-quantum ML-KEM-768 encapsulation is very fast (0.023 ms), more than twice as fast as a classical X25519 ephemeral exchange (0.060 ms).
+   - A hybrid KEM transaction costs ~0.12 ms to encapsulate and ~0.08 ms to decapsulate, covering the ephemeral ECDH, ML-KEM and the SHA3-256 combiner. The v3 combiner hashes only ~130 bytes, so it is cheaper than v2's HKDF over the full ~2.3 KB transcript. Decapsulation dropped from ~0.10 ms to ~0.08 ms.
+   - For signatures, ML-DSA-65 signing takes ~0.9–1.0 ms and dominates hybrid signing time; ECDSA adds very little (~0.03 ms).
 2. **Bandwidth / Storage Overhead:**
    - The primary trade-off in post-quantum and hybrid cryptography is **data size**, not computational speed.
    - Classical X25519 requires only 32 bytes for public keys and ciphertexts; Hybrid X25519 + ML-KEM-768 requires 1,227 bytes for public keys and 1,130 bytes for ciphertexts (~35x larger).
-   - Classical ECDSA signatures are only ~71 bytes; Hybrid signatures require 3,390 bytes (~47x larger).
+   - Classical ECDSA signatures are only ~71 bytes; Hybrid signatures require ~3,390 bytes (~48x larger; the ECDSA DER part varies by a few bytes per signature).
    - This demonstrates the crucial architectural finding for our group project: **enterprise networks migrating to PQC must account for larger packet sizes and MTU fragmentation rather than CPU bottlenecks.**
 
 ---
@@ -108,7 +119,7 @@ Measured on Windows x86_64 across 200 iterations per operation:
 |---|---|
 | **#1 RSA Module** | `hybrid_sig.py` supports `PROFILE_RSA_MLDSA65`, which integrates directly with RSA-2048 PSS keys. |
 | **#2 ECC Module** | `hybrid_kem.py` uses SECP256R1/X25519 ECDH; `hybrid_sig.py` uses SECP256R1 ECDSA. |
-| **#3 ML-KEM (Kyber)** | Fully conforms to FIPS 203 ML-KEM-768 parameter sets (1184B public key, 1088B ciphertext) matching Teammate 3's specifications. |
+| **#3 ML-KEM (Kyber)** | Fully conforms to FIPS 203 ML-KEM-768 parameter sets (1184B public key, 1088B ciphertext) matching Teammate 3's specifications. The X-Wing known-answer test uses Teammate 3's `Kyber/mlkem.py` (`MLKEM_Encaps_internal`) for deterministic encapsulation and matches the spec vector exactly. |
 | **#4 ML-DSA (Dilithium)** | Conforms to FIPS 204 ML-DSA-65 (1952B public key, 3309B signature) matching Teammate 4's algorithm. |
 | **#5 & #6 Classical & PQ PKI** | `hybrid_pki.py` demonstrates how a CA bridges classical X.509 chains with post-quantum identities across 3 migration policies. |
 | **#8 Performance Benchmarking** | `benchmark_hybrid.py` exports timing and byte metrics to `results/hybrid_benchmark.csv`. |
@@ -119,13 +130,16 @@ Measured on Windows x86_64 across 200 iterations per operation:
 ## Running the Code
 
 ### 1. Install Requirements
+From the repository root, create a virtual environment (`.venv/` is gitignored) and install the project-wide requirements:
 ```bash
-pip install -r hybrid-module/requirements.txt
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt "pytest>=8" cmake
 ```
+`cmake` is only needed by `security-testing-module`: on first import, `liboqs-python` builds the liboqs C library into `~/_oqs` (this needs a C compiler and git). The hybrid module itself only needs `cryptography>=50`.
 
 ### 2. Run the Unit & Security Tests
 ```bash
-python -m pytest hybrid-module/test_hybrid.py -v
+.venv/bin/python -m pytest hybrid-module -v
 ```
 
 ### 3. Run Performance Benchmarks

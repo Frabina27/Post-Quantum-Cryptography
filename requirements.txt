@@ -1,2 +1,3 @@
 liboqs-python
 cryptography>=50
+kyber-py  # reference ML-KEM, used by Kyber/test_mlkem.py

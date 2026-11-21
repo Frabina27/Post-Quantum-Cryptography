@@ -5,7 +5,6 @@ from cryptography.exceptions import InvalidSignature
 
 class RSACrypto:
 
-
     def __init__(self, key_size=2048):
 
 
@@ -20,7 +19,6 @@ class RSACrypto:
 
     def generate_keypair(self):
 
-
         self.private_key = rsa.generate_private_key(
             public_exponent=65537,
             key_size=self.key_size
@@ -31,7 +29,6 @@ class RSACrypto:
         return self.private_key, self.public_key
 
     def encrypt(self, plaintext):
-
 
         if not isinstance(plaintext, bytes):
             raise TypeError("Plaintext must be provided as bytes.")
@@ -51,7 +48,6 @@ class RSACrypto:
 
     def decrypt(self, ciphertext):
 
-
         if not isinstance(ciphertext, bytes):
             raise TypeError("Ciphertext must be provided as bytes.")
 
@@ -70,7 +66,6 @@ class RSACrypto:
 
     def sign(self, message):
 
-
         if not isinstance(message, bytes):
             raise TypeError("Message must be provided as bytes.")
 
@@ -88,7 +83,6 @@ class RSACrypto:
         return signature
 
     def verify(self, message, signature):
-
 
         if not isinstance(message, bytes):
             raise TypeError("Message must be provided as bytes.")
@@ -121,7 +115,6 @@ class RSACrypto:
 
     def get_private_key_pem(self):
 
-
         return self.private_key.private_bytes(
             encoding=serialization.Encoding.PEM,
             format=serialization.PrivateFormat.PKCS8,
@@ -130,10 +123,8 @@ class RSACrypto:
 
     def get_public_key_size_bytes(self):
 
-
         return len(self.get_public_key_pem())
 
     def get_private_key_size_bytes(self):
-
 
         return len(self.get_private_key_pem())
