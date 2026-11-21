@@ -178,6 +178,7 @@ class AlgorithmSpec:
     )
     _identify: Callable[[Any], bool] = field(repr=False, compare=False)
     _verify: Callable[[Any, bytes, bytes], None] = field(repr=False, compare=False)
+    _sign: Callable[[Any, bytes], bytes] = field(repr=False, compare=False)
 
     # -- signing seam ------------------------------------------------------
 
@@ -199,6 +200,28 @@ class AlgorithmSpec:
         here and nowhere else.
         """
         return (self.hash_algorithm,)
+
+    def sign_data(self, private_key: PrivateKeyTypes, data: bytes) -> bytes:
+        """Sign raw ``data`` with ``private_key`` and return the signature.
+
+        :meth:`sign_args` covers the ``pyca`` builders, which assemble the
+        signing call themselves. This covers signing arbitrary bytes, where
+        there is no builder to do that -- notably a detached file signature.
+        The shapes differ again and for a third time: ECDSA wants an
+        ``ECDSA(hash)`` wrapper, RSA wants an explicit padding *and* a hash
+        (the builders pick PKCS#1 v1.5 silently; here it has to be named), and
+        pure ML-DSA wants neither.
+
+        The verifying half is :meth:`verify_signature`, which already works on
+        arbitrary bytes and needs no counterpart.
+
+        Args:
+            private_key: A private key of this algorithm.
+            data: The bytes to sign. Signed directly, not pre-hashed by this
+                package -- for RSA and ECDSA the underlying call hashes it,
+                and for ML-DSA there is deliberately no pre-hash.
+        """
+        return self._sign(private_key, data)
 
     # -- verification seam -------------------------------------------------
 
@@ -310,6 +333,28 @@ def _verify_pure(pub: Any, signature: bytes, data: bytes) -> None:
 
 
 # --------------------------------------------------------------------------
+# Raw signing calls
+# --------------------------------------------------------------------------
+#
+# The mirror of the verification calls above, for signing bytes that are not
+# part of a certificate. Each is the exact inverse of its _verify_* twin, and
+# the two must be changed together or a signature will not round-trip.
+
+
+def _sign_ecdsa(key: Any, data: bytes) -> bytes:
+    return key.sign(data, ec.ECDSA(hashes.SHA256()))
+
+
+def _sign_rsa(key: Any, data: bytes) -> bytes:
+    return key.sign(data, padding.PKCS1v15(), hashes.SHA256())
+
+
+def _sign_pure(key: Any, data: bytes) -> bytes:
+    """Pure ML-DSA: no pre-hash, empty context, matching :func:`_verify_pure`."""
+    return key.sign(data)
+
+
+# --------------------------------------------------------------------------
 # The registry
 # --------------------------------------------------------------------------
 
@@ -339,6 +384,7 @@ _REGISTRY: dict[str, AlgorithmSpec] = {
             _hash_factory=hashes.SHA256,
             _identify=_is_ecdsa_p256,
             _verify=_verify_ecdsa,
+            _sign=_sign_ecdsa,
         ),
         AlgorithmSpec(
             name="rsa-2048",
@@ -351,6 +397,7 @@ _REGISTRY: dict[str, AlgorithmSpec] = {
             _hash_factory=hashes.SHA256,
             _identify=_is_rsa_2048,
             _verify=_verify_rsa,
+            _sign=_sign_rsa,
         ),
         AlgorithmSpec(
             name="ml-dsa-44",
@@ -361,6 +408,7 @@ _REGISTRY: dict[str, AlgorithmSpec] = {
             _hash_factory=None,
             _identify=_isinstance_of(mldsa.MLDSA44PublicKey),
             _verify=_verify_pure,
+            _sign=_sign_pure,
         ),
         AlgorithmSpec(
             name="ml-dsa-65",
@@ -371,6 +419,7 @@ _REGISTRY: dict[str, AlgorithmSpec] = {
             _hash_factory=None,
             _identify=_isinstance_of(mldsa.MLDSA65PublicKey),
             _verify=_verify_pure,
+            _sign=_sign_pure,
         ),
         AlgorithmSpec(
             name="ml-dsa-87",
@@ -381,6 +430,7 @@ _REGISTRY: dict[str, AlgorithmSpec] = {
             _hash_factory=None,
             _identify=_isinstance_of(mldsa.MLDSA87PublicKey),
             _verify=_verify_pure,
+            _sign=_sign_pure,
         ),
     )
 }

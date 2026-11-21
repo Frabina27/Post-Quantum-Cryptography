@@ -30,13 +30,17 @@ deliberately:
 * **No constant-time or side-channel guarantees.** Timing is *deliberately
   measured and exposed* here for the benchmarking comparison, which is close to
   the opposite of what production code should do with it.
-* **No serial-number database, no CRL distribution, no OCSP, no audit log, and
-  no name-constraint or policy-mapping support.** Revocation state lives in
-  memory for the life of a :class:`~pqpki.ca.CertificateAuthority` instance.
-* **Keys written to disk** go in a ``keys/`` subdirectory with mode ``0o600``.
-  On Windows that mode is advisory: the POSIX permission bits do not map onto
-  Windows ACLs, so the call succeeds without actually restricting access the
-  way it would on Linux or macOS.
+* **No serial-number database, no OCSP, no audit log, and no name-constraint
+  or policy-mapping support.** Revocation state is persisted, but as an
+  unauthenticated JSON file that anything with write access can edit.
+* **CRL distribution points are published, not fetched.** A certificate says
+  where its CRL lives; nothing here dereferences that URL. CRLs arrive as
+  arguments, so a caller decides what to trust and when.
+* **Keys written to disk** go in a ``keys/`` subdirectory with mode ``0o600``,
+  optionally passphrase-encrypted. On Windows that mode is advisory: the POSIX
+  permission bits do not map onto Windows ACLs, so the call succeeds without
+  actually restricting access the way it would on Linux or macOS -- which
+  makes the passphrase the only protection that really holds there.
 
 Do not use it to protect anything.
 """
@@ -66,7 +70,13 @@ from .errors import (
     UnsupportedKeyTypeError,
     ValidationInputError,
 )
-from .revocation import RevocationStatus, check_revocation
+from .revocation import (
+    RevocationStatus,
+    check_revocation,
+    crl_number,
+    delta_base_number,
+    is_delta_crl,
+)
 from .validate import FailureCode, ValidationResult, validate_chain
 
 __version__ = "0.1.0"
@@ -91,6 +101,21 @@ __all__ = [
     # revocation
     "check_revocation",
     "RevocationStatus",
+    "is_delta_crl",
+    "crl_number",
+    "delta_base_number",
+    # a file-backed hierarchy, for a front end to drive
+    "PKIStore",
+    "CertificateProfile",
+    "SignatureCheck",
+    # measurement
+    "benchmark_algorithm",
+    "AlgorithmResult",
+    # certificate-level attacks, for the security-testing module
+    "run_all",
+    "ChainAttack",
+    "IssuanceAttack",
+    "AttackOutcome",
     # errors
     "PQPKIError",
     "AlgorithmError",
@@ -105,3 +130,44 @@ __all__ = [
     "RevocationError",
     "__version__",
 ]
+
+# The tool modules -- the front-end backend, the benchmark harness, and the
+# attack vectors -- are exported lazily rather than imported here.
+#
+# Two reasons. Each has a ``main()`` and is meant to be run as
+# ``python -m pqpki.<name>``; importing it in this file means Python finds it
+# already in ``sys.modules`` when ``-m`` goes to execute it, and prints a
+# RuntimeWarning about unpredictable behaviour. And ``import pqpki`` should not
+# drag in ``argparse``, ``csv`` and ``statistics`` for a caller that only wants
+# to issue a certificate.
+#
+# PEP 562 keeps ``from pqpki import PKIStore`` working regardless.
+_LAZY = {
+    "AttackOutcome": "attacks",
+    "ChainAttack": "attacks",
+    "IssuanceAttack": "attacks",
+    "run_all": "attacks",
+    "CertificateProfile": "backend",
+    "PKIStore": "backend",
+    "SignatureCheck": "backend",
+    "AlgorithmResult": "benchmark",
+    "benchmark_algorithm": "benchmark",
+}
+
+
+def __getattr__(name: str) -> object:
+    """Resolve the lazily exported names on first access."""
+    module_name = _LAZY.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+    import importlib
+
+    module = importlib.import_module(f".{module_name}", __name__)
+    value = getattr(module, name)
+    globals()[name] = value  # resolved once; later lookups skip __getattr__
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted(__all__)
