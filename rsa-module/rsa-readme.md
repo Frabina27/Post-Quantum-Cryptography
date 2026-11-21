@@ -1,12 +1,9 @@
 # RSA Cryptographic Module
 
+## The benchmark measures RSA-2048 and RSA-3072 separately, averaging 10 key generations and 100 runs each for encryption, decryption, signing, and verification per key size.
+
 ## Project Overview
-
-For my part of the Post-Quantum Cryptography project, I worked on implementing RSA encryption, decryption, key generation, and digital signatures using Python.
-
-The main purpose of my module is to show how classical RSA cryptography works and provide results that our team can compare with post-quantum algorithms like ML-KEM and ML-DSA.
-
-I also added tests to check that everything works correctly and a benchmarking script to measure how RSA performs with different key sizes.
+For my part of the Post-Quantum Cryptography project, I worked on implementing RSA encryption, decryption, key generation, and digital signatures using Python. The main purpose of my module is to show how classical RSA cryptography works and provide results that our team can compare with post-quantum algorithms like ML-KEM and ML-DSA. I also added tests to check that everything works correctly and a benchmarking script to measure how RSA performs with different key sizes.
 
 ## Files and What They Do
 
@@ -25,7 +22,7 @@ I also added tests to check that everything works correctly and a benchmarking s
 
 I used the Python `cryptography` library to generate RSA public and private keys.
 
-My module supports two key sizes:
+My module supports
 - RSA-2048
 - RSA-3072
 
