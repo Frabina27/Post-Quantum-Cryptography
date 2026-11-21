@@ -19,37 +19,10 @@ For my part of the Post-Quantum Cryptography project, I worked on implementing R
 ## What I Implemented
 
 ### 1. RSA Key Generation
-
-I used the Python `cryptography` library to generate RSA public and private keys.
-
-My module supports
-- RSA-2048
-- RSA-3072
-
-The public key is used for encryption and signature verification, while the private key is used for decryption and signing.
-
 ### 2. Encryption and Decryption
-
-I implemented RSA encryption using OAEP padding and SHA-256.
-
-The program encrypts a message using the public key and then decrypts it using the private key. I tested this to make sure the decrypted message matches the original.
-
 ### 3. Digital Signatures
-
-I implemented RSA-PSS digital signatures using SHA-256.
-
-The private key creates a signature, and the public key verifies it. If someone changes the message or signature, verification should fail.
-
-This is important because digital signatures help detect changes to information and verify who signed it.
-
 ### 4. RSA Key Export
-
-I added functions to export public and private keys in PEM format.
-
-This allows the keys to be saved in a standard format and lets us measure how much space they take up.
-
 ### 5. RSA Testing
-
 I created seven tests to check that the module works as expected.
 
 The tests cover:
